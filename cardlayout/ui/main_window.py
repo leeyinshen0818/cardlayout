@@ -23,7 +23,10 @@ from PySide6.QtWidgets import (
 
 from cardlayout.models.card_side import CardSide, SideName
 from cardlayout.models.card_size import MALAYSIA_IC
+from cardlayout.models.detection import CardDetectionResult
 from cardlayout.models.layout import A4_LAYOUT
+from cardlayout.services.card_detector import CardDetector
+from cardlayout.services.card_processing import CardProcessingService
 from cardlayout.services.image_exporter import ExportError, ImageExporter
 from cardlayout.services.input_loader import InputLoadError, InputLoader, SUPPORTED_SUFFIXES
 from cardlayout.services.layout_engine import LayoutEngine
@@ -41,6 +44,7 @@ class MainWindow(QMainWindow):
         self.front: CardSide | None = None
         self.back: CardSide | None = None
         self.input_loader = InputLoader()
+        self.card_processor = CardProcessingService(CardDetector(MALAYSIA_IC))
         self.engine = LayoutEngine(A4_LAYOUT, MALAYSIA_IC)
         self.renderer = PageRenderer(self.engine)
         self.jpg_exporter = ImageExporter(self.renderer)
@@ -87,13 +91,15 @@ class MainWindow(QMainWindow):
         for widget in (self.front_widget, self.back_widget):
             widget.choose_requested.connect(self._choose_side)
             widget.clear_requested.connect(self._clear_side)
+            widget.detect_requested.connect(self._redetect_side)
+            widget.reset_detection_requested.connect(self._reset_detection)
 
         size_caption = QLabel("CARD SIZE")
         size_caption.setObjectName("sectionCaption")
         size_value = QLabel(MALAYSIA_IC.label)
         size_value.setObjectName("presetValue")
         size_value.setWordWrap(True)
-        local_note = QLabel("All files stay on this computer. No uploads or OCR.")
+        local_note = QLabel("Detection and export run locally. No uploads or OCR.")
         local_note.setWordWrap(True)
         local_note.setObjectName("privacyNote")
 
@@ -184,8 +190,13 @@ class MainWindow(QMainWindow):
                 self.front = result.card_side
             else:
                 self.back = result.card_side
+            detection = self._detect_cards([result.card_side])[0]
             self._refresh()
-            self.statusBar().showMessage(f"Loaded {result.card_side.display_name}", 5000)
+            self._card_widget(side).show_detected()
+            self.statusBar().showMessage(
+                f"Loaded {result.card_side.display_name}. {self._detection_message(detection)}",
+                7000,
+            )
             if result.notice:
                 QMessageBox.information(self, "PDF pages", result.notice)
         except InputLoadError as exc:
@@ -200,8 +211,19 @@ class MainWindow(QMainWindow):
         try:
             result = self.input_loader.load_two_page_pdf(path)
             self.front, self.back = result.front, result.back
+            cards = [card for card in (self.front, self.back) if card is not None]
+            detections = self._detect_cards(cards)
             self._refresh()
-            self.statusBar().showMessage(f"Loaded {Path(path).name}", 5000)
+            if self.front is not None:
+                self.front_widget.show_detected()
+            if self.back is not None:
+                self.back_widget.show_detected()
+            detection_summary = "; ".join(
+                self._detection_message(detection) for detection in detections
+            )
+            self.statusBar().showMessage(
+                f"Loaded {Path(path).name}. {detection_summary}", 8000
+            )
             if result.notice:
                 QMessageBox.information(self, "PDF pages", result.notice)
         except InputLoadError as exc:
@@ -221,6 +243,64 @@ class MainWindow(QMainWindow):
         self.back = old_front.assigned_to("back") if old_front else None
         self._refresh()
         self.statusBar().showMessage("Front and Back swapped", 3000)
+
+    def _redetect_side(self, side: str) -> None:
+        card = self.front if side == "front" else self.back
+        if card is None:
+            return
+        result = self._detect_cards([card])[0]
+        self._refresh()
+        widget = self._card_widget(side)
+        if result.success:
+            widget.show_detected()
+        else:
+            widget.show_original()
+        self.statusBar().showMessage(self._detection_message(result), 7000)
+
+    def _reset_detection(self, side: str) -> None:
+        card = self.front if side == "front" else self.back
+        if card is None:
+            return
+        self.card_processor.reset(card)
+        self._refresh()
+        self._card_widget(side).show_original()
+        self.statusBar().showMessage(
+            f"{side.title()} restored to the original image", 5000
+        )
+
+    def _detect_cards(
+        self, cards: list[CardSide]
+    ) -> list[CardDetectionResult]:
+        results: list[CardDetectionResult] = []
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for card in cards:
+                try:
+                    results.append(self.card_processor.detect(card))
+                except Exception:
+                    failure = CardDetectionResult(
+                        success=False,
+                        confidence=0.0,
+                        confidence_level="none",
+                        method="processing_error",
+                        debug_info={"reason": "Detection processing failed"},
+                    )
+                    card.apply_detection(failure)
+                    results.append(failure)
+        finally:
+            QApplication.restoreOverrideCursor()
+        return results
+
+    @staticmethod
+    def _detection_message(result: CardDetectionResult) -> str:
+        if result.success and result.confidence_level == "high":
+            return "Card detected automatically."
+        if result.success:
+            return "Card detected; review recommended."
+        return "Card detection uncertain; using the original image."
+
+    def _card_widget(self, side: str) -> CardInputWidget:
+        return self.front_widget if side == "front" else self.back_widget
 
     def _adjust_position(self, side: str, delta_mm: float) -> None:
         offset = self.engine.adjust_vertical_offset(side, delta_mm)  # type: ignore[arg-type]
@@ -302,6 +382,7 @@ class MainWindow(QMainWindow):
             QLabel#subtitle { color: #64748b; font-size: 9pt; }
             QLabel#sectionCaption, QLabel#sideTitle { color: #475569; font-size: 9pt; font-weight: 700; letter-spacing: 1px; }
             QLabel#fileName { color: #0f172a; font-weight: 600; }
+            QLabel#detectionStatus { font-size: 8pt; }
             QFrame#previewControls { background: #ffffff; border: 1px solid #b8c5d7; border-radius: 9px; }
             QLabel#previewSelection { color: #194b9b; font-size: 9pt; font-weight: 700; border: 0; }
             QPushButton#previewControlButton { background: #edf3fb; color: #234c86; border: 1px solid #bdcce0; padding: 0 10px; }
@@ -318,6 +399,9 @@ class MainWindow(QMainWindow):
             QPushButton#secondaryButton { background: #ffffff; color: #234c86; border: 1px solid #aebdd1; }
             QPushButton#secondaryButton:hover { background: #edf3fb; }
             QPushButton#quietButton { background: transparent; color: #64748b; border: 1px solid #d5dce6; }
+            QPushButton#detectionButton { min-height: 29px; padding: 0 7px; background: #ffffff; color: #526176; border: 1px solid #cbd4e0; font-size: 8pt; }
+            QPushButton#detectionButton:checked { background: #e8f0ff; color: #194b9b; border-color: #83a7df; }
+            QPushButton#detectionButton:hover { background: #edf3fb; }
             QPushButton:disabled { color: #aab2bf; background: #f1f3f6; border-color: #e2e6ec; }
             QScrollArea { background: #f4f6f9; }
             QSplitter::handle { background: #dce2ea; width: 1px; }

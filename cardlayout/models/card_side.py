@@ -6,6 +6,8 @@ from typing import Literal
 
 from PIL import Image
 
+from cardlayout.models.detection import CardDetectionResult
+
 SideName = Literal["front", "back"]
 SourceType = Literal["image", "pdf"]
 
@@ -20,6 +22,8 @@ class CardSide:
     source_page: int | None
     original_image: Image.Image
     processed_image: Image.Image
+    detected_image: Image.Image | None = None
+    detection_result: CardDetectionResult | None = None
 
     @property
     def display_name(self) -> str:
@@ -31,3 +35,17 @@ class CardSide:
         """Return a new assignment without reloading or copying image pixels."""
         return replace(self, side=side)
 
+    def apply_detection(self, result: CardDetectionResult) -> None:
+        """Apply a safe detection result without altering the normalized source."""
+        self.detection_result = result
+        if result.success and result.cropped_image is not None:
+            self.detected_image = result.cropped_image
+            self.processed_image = self.detected_image
+        else:
+            self.detected_image = None
+            self.processed_image = self.original_image.copy()
+
+    def reset_detection(self) -> None:
+        self.detected_image = None
+        self.detection_result = None
+        self.processed_image = self.original_image.copy()
