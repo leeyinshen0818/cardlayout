@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cardlayout"
+version = "0.1.0"
+description = "Local desktop tool for arranging card fronts and backs on A4"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "Pillow>=10.0",
+    "PyMuPDF>=1.23",
+    "PySide6>=6.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+cardlayout = "cardlayout.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["cardlayout*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
