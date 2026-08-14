@@ -3,6 +3,12 @@ from .card_size import CardSizePreset, MALAYSIA_IC
 from .detection import CardDetectionResult, ConfidenceLevel
 from .detection_config import CardDetectionConfig, DetectionScoreWeights
 from .layout import A4_LAYOUT, LayoutPreset, MmRect, PageLayout
+from .perspective import (
+    CornerRefinementResult,
+    EdgeFitResult,
+    PerspectiveConfig,
+    PerspectiveResult,
+)
 
 __all__ = [
     "A4_LAYOUT",
@@ -14,6 +20,10 @@ __all__ = [
     "MALAYSIA_IC",
     "MmRect",
     "PageLayout",
+    "PerspectiveConfig",
+    "PerspectiveResult",
+    "CornerRefinementResult",
+    "EdgeFitResult",
     "SideName",
     "SourceType",
     "ConfidenceLevel",

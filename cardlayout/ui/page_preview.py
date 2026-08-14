@@ -91,7 +91,7 @@ class PagePreview(QWidget):
         painter.setClipRect(target)
         painter.fillRect(target, QColor("#f7f9fc"))
         if side is not None:
-            pixmap = QPixmap.fromImage(pil_to_qimage(side.processed_image))
+            pixmap = QPixmap.fromImage(pil_to_qimage(side.best_image))
             scaled = pixmap.scaled(
                 target.size().toSize(),
                 Qt.AspectRatioMode.KeepAspectRatio,

@@ -5,6 +5,7 @@ from PIL import Image
 
 from cardlayout.models.card_size import MALAYSIA_IC
 from cardlayout.models.layout import A4_LAYOUT
+from cardlayout.models.perspective import PerspectiveResult
 from cardlayout.services.image_exporter import ImageExporter
 from cardlayout.services.input_loader import InputLoader
 from cardlayout.services.layout_engine import LayoutEngine
@@ -75,3 +76,52 @@ def test_pdf_and_jpg_put_both_sides_at_same_positions(tmp_path: Path, export_set
     assert pdf_colors[0][0] > 150 and pdf_colors[0][1] < 70
     assert jpg_colors[1][2] > jpg_colors[1][0]
     assert pdf_colors[1][2] > pdf_colors[1][0]
+
+
+def test_pdf_and_jpg_use_manual_corrected_image_as_best_stage(
+    tmp_path: Path, export_setup
+) -> None:
+    import pymupdf as fitz
+
+    engine, renderer, front, _ = export_setup
+    automatic_image = Image.new("RGB", (856, 540), (20, 190, 60))
+    manual_image = Image.new("RGB", (856, 540), (245, 190, 25))
+    front.apply_automatic_correction(
+        PerspectiveResult(
+            success=True,
+            rectified_image=automatic_image,
+            confidence=0.9,
+            confidence_level="high",
+            status="corrected",
+            method="automatic",
+        )
+    )
+    front.apply_manual_correction(
+        PerspectiveResult(
+            success=True,
+            rectified_image=manual_image,
+            confidence=0.95,
+            confidence_level="high",
+            status="corrected",
+            method="manual",
+        )
+    )
+    jpg_path = tmp_path / "corrected-layout.jpg"
+    pdf_path = tmp_path / "corrected-layout.pdf"
+    ImageExporter(renderer).export(jpg_path, front, None)
+    PDFExporter(renderer).export(pdf_path, front, None)
+    bounds = engine.rect_at_dpi(engine.calculate().front, 300)
+    center = ((bounds[0] + bounds[2]) // 2, (bounds[1] + bounds[3]) // 2)
+
+    with Image.open(jpg_path) as jpg:
+        jpg_color = jpg.convert("RGB").getpixel(center)
+    with fitz.open(pdf_path) as document:
+        pix = document[0].get_pixmap(
+            matrix=fitz.Matrix(300 / 72, 300 / 72), alpha=False
+        )
+        pdf_color = Image.frombytes(
+            "RGB", (pix.width, pix.height), pix.samples
+        ).getpixel(center)
+
+    assert jpg_color[0] > 200 and jpg_color[1] > 140 and jpg_color[2] < 70
+    assert pdf_color[0] > 200 and pdf_color[1] > 140 and pdf_color[2] < 70

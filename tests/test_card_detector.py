@@ -168,7 +168,9 @@ def test_processing_preserves_original_and_reset_restores_it(detector) -> None:
     result = service.detect(side)
     assert result.success
     assert side.detected_image is result.cropped_image
-    assert side.processed_image is side.detected_image
+    assert side.automatic_perspective_result is not None
+    assert side.automatic_perspective_result.success
+    assert side.processed_image is side.rectified_image
     assert side.original_image.tobytes() == original_bytes
 
     service.reset(side)

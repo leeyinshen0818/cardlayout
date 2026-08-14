@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -33,6 +34,7 @@ from cardlayout.services.layout_engine import LayoutEngine
 from cardlayout.services.page_renderer import PageRenderer
 from cardlayout.services.pdf_exporter import PDFExporter
 from cardlayout.ui.card_input_widget import CardInputWidget
+from cardlayout.ui.corner_editor import CornerEditorDialog
 from cardlayout.ui.page_preview import PagePreview
 
 FILE_FILTER = "Card sources (*.jpg *.jpeg *.png *.pdf)"
@@ -93,6 +95,8 @@ class MainWindow(QMainWindow):
             widget.clear_requested.connect(self._clear_side)
             widget.detect_requested.connect(self._redetect_side)
             widget.reset_detection_requested.connect(self._reset_detection)
+            widget.adjust_corners_requested.connect(self._adjust_corners)
+            widget.reset_correction_requested.connect(self._reset_correction)
 
         size_caption = QLabel("CARD SIZE")
         size_caption.setObjectName("sectionCaption")
@@ -192,7 +196,7 @@ class MainWindow(QMainWindow):
                 self.back = result.card_side
             detection = self._detect_cards([result.card_side])[0]
             self._refresh()
-            self._card_widget(side).show_detected()
+            self._card_widget(side).show_corrected()
             self.statusBar().showMessage(
                 f"Loaded {result.card_side.display_name}. {self._detection_message(detection)}",
                 7000,
@@ -215,9 +219,9 @@ class MainWindow(QMainWindow):
             detections = self._detect_cards(cards)
             self._refresh()
             if self.front is not None:
-                self.front_widget.show_detected()
+                self.front_widget.show_corrected()
             if self.back is not None:
-                self.back_widget.show_detected()
+                self.back_widget.show_corrected()
             detection_summary = "; ".join(
                 self._detection_message(detection) for detection in detections
             )
@@ -248,14 +252,81 @@ class MainWindow(QMainWindow):
         card = self.front if side == "front" else self.back
         if card is None:
             return
+        if card.has_manual_correction:
+            answer = QMessageBox.question(
+                self,
+                "Replace manual correction?",
+                "Re-detecting will replace the manually adjusted corners. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
         result = self._detect_cards([card])[0]
         self._refresh()
         widget = self._card_widget(side)
         if result.success:
-            widget.show_detected()
+            widget.show_corrected()
         else:
             widget.show_original()
         self.statusBar().showMessage(self._detection_message(result), 7000)
+
+    def _adjust_corners(self, side: str) -> None:
+        card = self.front if side == "front" else self.back
+        if card is None or card.detection_result is None:
+            return
+        detection_points = card.detection_result.polygon_points
+        if len(detection_points) != 4:
+            self._show_error(
+                "Corners unavailable",
+                "Re-detect the card before adjusting its corners.",
+            )
+            return
+        corrector = self.card_processor.perspective_corrector
+        try:
+            ordered = corrector.order_corners(detection_points)
+        except ValueError as exc:
+            self._show_error("Corners unavailable", str(exc))
+            return
+        automatic_points = tuple(
+            (float(point[0]), float(point[1])) for point in ordered
+        )
+        automatic = card.automatic_perspective_result
+        if automatic is not None and len(automatic.refined_points) == 4:
+            automatic_points = automatic.refined_points
+        current_points = (
+            card.manual_perspective_result.source_points
+            if card.manual_perspective_result is not None
+            and len(card.manual_perspective_result.source_points) == 4
+            else automatic_points
+        )
+        dialog = CornerEditorDialog(
+            card.original_image,
+            automatic_points,
+            corrector,
+            card.detection_result.confidence,
+            current_points=current_points,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted or dialog.result is None:
+            return
+        card.apply_manual_correction(dialog.result)
+        self._refresh()
+        self._card_widget(side).show_corrected()
+        self.statusBar().showMessage(
+            f"{side.title()} manual correction applied", 5000
+        )
+
+    def _reset_correction(self, side: str) -> None:
+        card = self.front if side == "front" else self.back
+        if card is None:
+            return
+        self.card_processor.reset_correction(card)
+        self._refresh()
+        self._card_widget(side).show_corrected()
+        self.statusBar().showMessage(
+            f"{side.title()} restored to automatic correction", 5000
+        )
 
     def _reset_detection(self, side: str) -> None:
         card = self.front if side == "front" else self.back

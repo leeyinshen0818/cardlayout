@@ -25,7 +25,7 @@ class PageRenderer:
         border_width: int = 2,
     ) -> Image.Image:
         if side is not None:
-            card = fit_image(side.processed_image, size)
+            card = fit_image(side.best_image, size)
         else:
             card = Image.new("RGB", size, (247, 249, 252))
             draw = ImageDraw.Draw(card)
@@ -76,4 +76,3 @@ class PageRenderer:
             border_width=max(1, int(round(dpi / 150))),
         )
         page.paste(card, (left, top))
-
