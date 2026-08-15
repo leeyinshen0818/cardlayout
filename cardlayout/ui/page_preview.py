@@ -203,7 +203,9 @@ class PagePreview(QWidget):
         )
 
     def _page_rect(self) -> QRectF:
-        margin = 34.0
+        # Keep a modest breathing space while allowing the paper to use the
+        # center workspace more effectively at normal desktop window sizes.
+        margin = 18.0
         layout = self.engine.calculate()
         scale = min(
             max(1.0, self.width() - margin * 2) / layout.page_width_mm,

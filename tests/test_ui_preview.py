@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QFileDialog, QFrame, QLabel, QMessageBox
 from PIL import Image
 
 from cardlayout.models.card_side import CardSide
@@ -30,6 +30,65 @@ def _click_card(window: MainWindow, side: str) -> None:
         pos=target.center().toPoint(),
     )
     QApplication.processEvents()
+
+
+def test_main_window_uses_clean_responsibility_based_layout() -> None:
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window.show()
+    app.processEvents()
+
+    header = window.findChild(QFrame, "header")
+    assert header is not None
+    assert [label.text() for label in header.findChildren(QLabel)] == ["CardLayout"]
+    assert not any(
+        label.text() == "Click Front or Back to select and edit it"
+        for label in window.findChildren(QLabel)
+    )
+    assert window.pdf_button.parent() is not header
+    assert window.swap_button.parent() is not header
+    assert window.pdf_button.geometry().top() < window.front_widget.geometry().top()
+    assert window.front_widget.geometry().bottom() < window.swap_button.geometry().top()
+    assert window.swap_button.geometry().bottom() < window.back_widget.geometry().top()
+    assert window.swap_button.text() == "⇅  Swap Front / Back"
+
+    window.close()
+
+
+def test_exports_save_directly_to_downloads_without_save_dialog(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    saved_paths: list[Path] = []
+
+    monkeypatch.setattr(window, "_downloads_directory", lambda: tmp_path)
+    monkeypatch.setattr(
+        window.jpg_exporter,
+        "export",
+        lambda path, front, back: saved_paths.append(Path(path)),
+    )
+    monkeypatch.setattr(
+        window.pdf_exporter,
+        "export",
+        lambda path, front, back: saved_paths.append(Path(path)),
+    )
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: pytest.fail("Save As dialog must not open"),
+    )
+
+    (tmp_path / "card-layout.jpg").touch()
+    window._export_jpg()
+    window._export_pdf()
+
+    assert saved_paths == [
+        tmp_path / "card-layout (1).jpg",
+        tmp_path / "card-layout.pdf",
+    ]
+    assert "exported to" in window.statusBar().currentMessage()
+    window.close()
 
 
 def test_preview_selection_reveals_controls_and_moves_each_side() -> None:
@@ -273,6 +332,7 @@ def test_sidebar_reflows_preview_switches_side_and_preserves_state(
     layout_before = window.engine.calculate()
     closed_width = window.preview_panel.width()
     assert not window.corrections_sidebar.isVisible()
+    assert window.corrections_button.isVisible()
 
     QTest.mouseClick(window.corrections_button, Qt.MouseButton.LeftButton)
     app.processEvents()
@@ -280,6 +340,7 @@ def test_sidebar_reflows_preview_switches_side_and_preserves_state(
     assert window.preview.selected_side == "front"
     assert window.corrections_sidebar.title.text() == "Corrections · FRONT"
     assert window.corrections_sidebar.isVisible()
+    assert not window.corrections_button.isVisible()
     assert expanded_width < closed_width
     assert window.corrections_sidebar.geometry().left() >= (
         window.preview_panel.geometry().right()
@@ -320,6 +381,7 @@ def test_sidebar_reflows_preview_switches_side_and_preserves_state(
     )
     app.processEvents()
     assert not window.corrections_sidebar.isVisible()
+    assert window.corrections_button.isVisible()
     assert window.preview.selected_side is None
     assert window.preview_panel.width() > expanded_width
     assert window.back.image_correction_state.tone == "bright_10"

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QStandardPaths, Qt
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -64,27 +64,18 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         title = QLabel("CardLayout")
         title.setObjectName("appTitle")
-        subtitle = QLabel("Arrange card fronts and backs for accurate A4 printing")
-        subtitle.setObjectName("subtitle")
 
-        title_box = QVBoxLayout()
-        title_box.setSpacing(1)
-        title_box.addWidget(title)
-        title_box.addWidget(subtitle)
-
-        pdf_button = QPushButton("Open 2-Page PDF")
-        pdf_button.setObjectName("secondaryButton")
-        pdf_button.clicked.connect(self._choose_two_page_pdf)
-        swap_button = QPushButton("Swap Front / Back")
-        swap_button.setObjectName("secondaryButton")
-        swap_button.clicked.connect(self._swap_sides)
+        self.pdf_button = QPushButton("Open 2-Page PDF")
+        self.pdf_button.setObjectName("secondaryButton")
+        self.pdf_button.clicked.connect(self._choose_two_page_pdf)
+        self.swap_button = QPushButton("⇅  Swap Front / Back")
+        self.swap_button.setObjectName("swapButton")
+        self.swap_button.clicked.connect(self._swap_sides)
 
         header = QHBoxLayout()
-        header.setContentsMargins(22, 15, 22, 15)
-        header.addLayout(title_box)
+        header.setContentsMargins(22, 10, 22, 10)
+        header.addWidget(title)
         header.addStretch()
-        header.addWidget(pdf_button)
-        header.addWidget(swap_button)
 
         header_widget = QFrame()
         header_widget.setObjectName("header")
@@ -107,11 +98,16 @@ class MainWindow(QMainWindow):
         local_note = QLabel("Detection and export run locally. No uploads or OCR.")
         local_note.setWordWrap(True)
         local_note.setObjectName("privacyNote")
+        import_caption = QLabel("IMPORT")
+        import_caption.setObjectName("sectionCaption")
 
         controls_layout = QVBoxLayout()
         controls_layout.setContentsMargins(18, 18, 18, 18)
         controls_layout.setSpacing(13)
+        controls_layout.addWidget(import_caption)
+        controls_layout.addWidget(self.pdf_button)
         controls_layout.addWidget(self.front_widget)
+        controls_layout.addWidget(self.swap_button)
         controls_layout.addWidget(self.back_widget)
         controls_layout.addWidget(size_caption)
         controls_layout.addWidget(size_value)
@@ -126,11 +122,10 @@ class MainWindow(QMainWindow):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(controls)
         scroll.setMinimumWidth(360)
+        scroll.setMaximumWidth(420)
 
         preview_title = QLabel("A4 PORTRAIT PREVIEW")
         preview_title.setObjectName("sectionCaption")
-        preview_note = QLabel("Click Front or Back to select and edit it")
-        preview_note.setObjectName("subtitle")
         self.corrections_button = QPushButton("Corrections")
         self.corrections_button.setObjectName("compactExpandButton")
         self.corrections_button.setEnabled(False)
@@ -145,7 +140,6 @@ class MainWindow(QMainWindow):
         preview_heading = QHBoxLayout()
         preview_heading.addWidget(preview_title)
         preview_heading.addStretch()
-        preview_heading.addWidget(preview_note)
         preview_heading.addWidget(self.corrections_button)
         preview_layout = QVBoxLayout()
         preview_layout.setContentsMargins(18, 18, 18, 18)
@@ -409,6 +403,7 @@ class MainWindow(QMainWindow):
             self.splitter.setSizes(
                 [left_width, max(self.preview.minimumWidth(), available), sidebar_width]
             )
+        self.corrections_button.hide()
         self.corrections_sidebar.raise_()
         self.preview.updateGeometry()
         self.preview.update()
@@ -417,6 +412,7 @@ class MainWindow(QMainWindow):
         if self.preview.selected_side is not None:
             self.preview.clear_selection(emit=False)
         self.corrections_sidebar.hide()
+        self.corrections_button.show()
         self.preview.updateGeometry()
         self.preview.update()
 
@@ -510,27 +506,43 @@ class MainWindow(QMainWindow):
                 self.corrections_sidebar.set_card(card)
 
     def _export_pdf(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Export A4 PDF", "card-layout.pdf", "PDF (*.pdf)")
-        if not path:
+        try:
+            path = self._automatic_export_path(".pdf")
+        except OSError as exc:
+            self._show_error("Export failed", f"Could not access Downloads: {exc}")
             return
-        if not path.lower().endswith(".pdf"):
-            path += ".pdf"
         self._run_export("PDF", path, self.pdf_exporter.export)
 
     def _export_jpg(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Export A4 JPG", "card-layout.jpg", "JPEG (*.jpg *.jpeg)")
-        if not path:
+        try:
+            path = self._automatic_export_path(".jpg")
+        except OSError as exc:
+            self._show_error("Export failed", f"Could not access Downloads: {exc}")
             return
-        if not path.lower().endswith((".jpg", ".jpeg")):
-            path += ".jpg"
         self._run_export("JPG", path, self.jpg_exporter.export)
 
-    def _run_export(self, kind: str, path: str, exporter: object) -> None:
+    @staticmethod
+    def _downloads_directory() -> Path:
+        standard_path = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.DownloadLocation
+        )
+        return Path(standard_path) if standard_path else Path.home() / "Downloads"
+
+    def _automatic_export_path(self, suffix: str) -> Path:
+        downloads = self._downloads_directory()
+        downloads.mkdir(parents=True, exist_ok=True)
+        candidate = downloads / f"card-layout{suffix}"
+        sequence = 1
+        while candidate.exists():
+            candidate = downloads / f"card-layout ({sequence}){suffix}"
+            sequence += 1
+        return candidate
+
+    def _run_export(self, kind: str, path: str | Path, exporter: object) -> None:
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             exporter(path, self.front, self.back)  # type: ignore[operator]
             self.statusBar().showMessage(f"{kind} exported to {path}", 8000)
-            QMessageBox.information(self, "Export complete", f"The A4 {kind} was saved successfully.")
         except ExportError as exc:
             self._show_error("Export failed", str(exc))
         finally:
@@ -581,6 +593,8 @@ class MainWindow(QMainWindow):
             QPushButton#previewDoneButton { background: transparent; color: #64748b; border: 0; padding: 0 8px; }
             QPushButton#compactExpandButton { min-height: 28px; padding: 0 10px; background: #ffffff; color: #234c86; border: 1px solid #bdc9d9; font-size: 8pt; }
             QPushButton#compactExpandButton:hover { background: #edf3fb; }
+            QPushButton#swapButton { min-height: 28px; padding: 0 10px; background: transparent; color: #526176; border: 1px solid #d5dce6; font-size: 8pt; }
+            QPushButton#swapButton:hover { background: #edf3fb; color: #234c86; }
             QPushButton#sidebarCloseButton { min-width: 0; min-height: 0; padding: 0; background: transparent; color: #64748b; border: 0; font-size: 15pt; font-weight: 400; }
             QPushButton#sidebarCloseButton:hover { background: #eef2f7; color: #0f172a; }
             QPushButton#sidebarResetButton { min-height: 30px; background: #ffffff; color: #526176; border: 1px solid #cbd4e0; font-size: 8pt; }
