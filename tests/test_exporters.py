@@ -5,6 +5,7 @@ from PIL import Image
 
 from cardlayout.models.card_size import MALAYSIA_IC
 from cardlayout.models.layout import A4_LAYOUT
+from cardlayout.models.image_correction import ImageCorrectionState
 from cardlayout.models.perspective import PerspectiveResult
 from cardlayout.services.image_exporter import ImageExporter
 from cardlayout.services.input_loader import InputLoader
@@ -125,3 +126,57 @@ def test_pdf_and_jpg_use_manual_corrected_image_as_best_stage(
 
     assert jpg_color[0] > 200 and jpg_color[1] > 140 and jpg_color[2] < 70
     assert pdf_color[0] > 200 and pdf_color[1] > 140 and pdf_color[2] < 70
+
+
+def test_normal_correction_preserves_existing_render_exactly(export_setup) -> None:
+    _, renderer, front, back = export_setup
+    before = renderer.render_page(front, back, 150)
+
+    front.apply_image_correction(ImageCorrectionState())
+    back.apply_image_correction(ImageCorrectionState())
+    after = renderer.render_page(front, back, 150)
+
+    assert after.size == before.size
+    assert after.tobytes() == before.tobytes()
+
+
+def test_independent_front_and_back_presets_are_used_by_jpg_and_pdf(
+    tmp_path: Path, export_setup
+) -> None:
+    import pymupdf as fitz
+
+    engine, renderer, front, back = export_setup
+    baseline = renderer.render_page(front, back, 300)
+    layout = engine.calculate()
+    centers = []
+    for rect in (layout.front, layout.back):
+        bounds = engine.rect_at_dpi(rect, 300)
+        centers.append(((bounds[0] + bounds[2]) // 2, (bounds[1] + bounds[3]) // 2))
+    baseline_colors = [baseline.getpixel(center) for center in centers]
+
+    front.apply_image_correction(ImageCorrectionState(tone="bright_10"))
+    back.apply_image_correction(
+        ImageCorrectionState(sharpen="sharp", tone="bright_20")
+    )
+    jpg_path = tmp_path / "corrected-presets.jpg"
+    pdf_path = tmp_path / "corrected-presets.pdf"
+    ImageExporter(renderer).export(jpg_path, front, back)
+    PDFExporter(renderer).export(pdf_path, front, back)
+
+    with Image.open(jpg_path) as jpg:
+        assert jpg.size == baseline.size
+        jpg_colors = [jpg.convert("RGB").getpixel(center) for center in centers]
+    with fitz.open(pdf_path) as document:
+        pix = document[0].get_pixmap(
+            matrix=fitz.Matrix(300 / 72, 300 / 72), alpha=False
+        )
+        pdf_page = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        pdf_colors = [pdf_page.getpixel(center) for center in centers]
+
+    for index in range(2):
+        assert sum(jpg_colors[index]) > sum(baseline_colors[index]) + 8
+        assert sum(pdf_colors[index]) > sum(baseline_colors[index]) + 8
+    assert front.image_correction_state.tone == "bright_10"
+    assert back.image_correction_state.tone == "bright_20"
+    assert front.image_correction_state.sharpen == "normal"
+    assert back.image_correction_state.sharpen == "sharp"

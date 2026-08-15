@@ -2,7 +2,7 @@
 
 CardLayout is a local desktop application for placing the front and back of a physical card on an A4 portrait page and exporting a print-ready PDF or JPG. It is a general card layout tool; Malaysia IC is simply the first built-in size preset.
 
-## Current capabilities (Phases 1–3.2)
+## Current capabilities (Phases 1–4)
 
 - Load Front and Back from JPG, JPEG, or PNG files.
 - Load Page 1 from separate PDF files, including mixed image/PDF input.
@@ -33,6 +33,9 @@ CardLayout is a local desktop application for placing the front and back of a ph
 - Adjust all four source corners manually in a dedicated editor with labeled handles, connecting lines, live rectified preview, mouse-wheel zoom, pan, Fit, 100%, reset-to-automatic, Apply, and Cancel.
 - Reject overlapping, crossing, out-of-bounds, non-convex, or near-zero-area manual corner geometry before it can be applied.
 - Keep manual corrections authoritative until the user resets correction, explicitly accepts re-detection, or imports a new source.
+- Click either side preview to open a compact corrections panel with visual thumbnails for Soft, Normal, Sharp, Sharper, and five conservative brightness/contrast choices.
+- Keep Front and Back appearance settings independent and render every selection non-destructively from the best geometry-corrected source.
+- Use a single side Reset action to discard manual corners and appearance presets while retaining the imported file and current automatic result.
 - Use the same best-stage priority for A4 preview, PDF, and JPG: manual correction, automatic correction, detected crop, then original.
 
 The current preset is **Malaysia IC — 85.6 × 54 mm**. Both cards are centered horizontally. The default pair is shifted 25 mm lower than the original Phase 1 position: Front starts 61.6 mm from the page top and Back starts at 135.6 mm, leaving a 20 mm gap. Each side can then be moved independently while remaining inside the A4 page.
@@ -62,7 +65,7 @@ Install the development dependencies as shown above, then run:
 python -m pytest
 ```
 
-Tests cover JPG/PNG normalization, one/two/multi-page PDFs, invalid input, A4/card geometry, PDF/JPG export, consistent placement, detection scoring and geometry, rotated cards, clutter, ambiguous candidates, nested rectangles, white/light/dark support surfaces, nearby phones and notebooks, blank-paper rejection, safe failure, perspective ordering and validation, robust line fitting and outlier rejection, local search bands, rounded and partially occluded boundaries, color-only edges, strong internal rectangles, refinement fallback and background-hijack rejection, exact preset ratios, correction state, corrected-stage export, draggable corner controls, zoom/pan coordinate stability, and UI interactions. Tests do not require manually opening the GUI.
+Tests cover JPG/PNG normalization, one/two/multi-page PDFs, invalid input, A4/card geometry, PDF/JPG export, consistent placement, detection scoring and geometry, rotated cards, clutter, ambiguous candidates, nested rectangles, white/light/dark support surfaces, nearby phones and notebooks, blank-paper rejection, safe failure, perspective ordering and validation, robust line fitting and outlier rejection, local search bands, rounded and partially occluded boundaries, color-only edges, strong internal rectangles, refinement fallback and background-hijack rejection, exact preset ratios, independent image-correction state, deterministic preset strength, non-cumulative rendering, correction-aware JPG/PDF export, draggable corner controls, zoom/pan coordinate stability, and UI interactions. Tests do not require manually opening the GUI.
 
 ## Architecture
 
@@ -86,6 +89,8 @@ Phase 3.2 treats detector corners as mandatory spatial context. It pads the dete
 
 Perspective debug mode additionally exposes rough geometry, search bands, raw edge evidence, inliers and rejected outliers, fitted physical lines, final intersections, per-edge scores/support/residuals, per-corner confidence, rough-to-refined displacement, refinement confidence, and fallback reason. Images remain in memory unless a developer explicitly saves them.
 
+Phase 4 keeps the geometry stages unchanged and adds manual appearance correction afterward. Preset parameters live in `models/image_correction.py`; thumbnails are generated from small copies, while each selected full-size result is cached from the unchanged geometry source. `CardSide.best_image` remains the shared source for the side preview, A4 preview, JPG export, and PDF export. The normal left panel exposes only Choose, Clear, Adjust Corners, and Reset; technical detection stages remain available internally and through debug data.
+
 ## Not implemented yet
 
-Background segmentation/removal, automatic brightness or white-balance correction, contrast enhancement, sharpening/restoration, denoise, deblur, OCR, upside-down content recognition, and AI features are not implemented. Phase 3 focuses only on geometry.
+Background segmentation/removal, automatic enhancement or white balance, saturation controls, restoration, denoise, deblur, OCR, upside-down content recognition, and AI features are not implemented. Manual Phase 4 presets only adjust existing pixels and cannot reconstruct missing detail.

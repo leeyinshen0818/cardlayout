@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
 from PIL import Image
 
 from cardlayout.models.detection import CardDetectionResult
+from cardlayout.models.image_correction import ImageCorrectionState
 from cardlayout.models.perspective import PerspectiveResult
+from cardlayout.services.image_corrections import apply_image_correction
 
 SideName = Literal["front", "back"]
 SourceType = Literal["image", "pdf"]
@@ -28,6 +30,10 @@ class CardSide:
     rectified_image: Image.Image | None = None
     automatic_perspective_result: PerspectiveResult | None = None
     manual_perspective_result: PerspectiveResult | None = None
+    image_correction_state: ImageCorrectionState = field(
+        default_factory=ImageCorrectionState
+    )
+    corrected_image: Image.Image | None = None
 
     @property
     def display_name(self) -> str:
@@ -47,10 +53,10 @@ class CardSide:
         self.detection_result = result
         if result.success and result.cropped_image is not None:
             self.detected_image = result.cropped_image
-            self.processed_image = self.detected_image
         else:
             self.detected_image = None
-            self.processed_image = self.original_image.copy()
+        self._refresh_image_correction()
+        self.processed_image = self.best_image
 
     @property
     def active_perspective_result(self) -> PerspectiveResult | None:
@@ -65,6 +71,13 @@ class CardSide:
     @property
     def best_image(self) -> Image.Image:
         """Image used by both the A4 preview and every exporter."""
+        if not self.image_correction_state.is_normal and self.corrected_image is not None:
+            return self.corrected_image
+        return self.geometry_image
+
+    @property
+    def geometry_image(self) -> Image.Image:
+        """Best geometry-only image before Phase 4 appearance corrections."""
         if self.manual_perspective_result is not None:
             manual = self.manual_perspective_result.rectified_image
             if self.manual_perspective_result.success and manual is not None:
@@ -97,9 +110,21 @@ class CardSide:
         self.manual_perspective_result = result
         self._refresh_processed_stage()
 
+    def apply_image_correction(self, state: ImageCorrectionState) -> None:
+        self.image_correction_state = state
+        self._refresh_image_correction()
+        self.processed_image = self.best_image
+
     def reset_correction(self) -> None:
         """Discard manual geometry and restore the current automatic result."""
         self.manual_perspective_result = None
+        self._refresh_processed_stage()
+
+    def reset_user_edits(self) -> None:
+        """Restore automatic geometry and Normal appearance without reloading."""
+        self.manual_perspective_result = None
+        self.image_correction_state = ImageCorrectionState()
+        self.corrected_image = None
         self._refresh_processed_stage()
 
     def _refresh_processed_stage(self) -> None:
@@ -108,7 +133,16 @@ class CardSide:
             self.rectified_image = active.rectified_image
         else:
             self.rectified_image = None
+        self._refresh_image_correction()
         self.processed_image = self.best_image
+
+    def _refresh_image_correction(self) -> None:
+        if self.image_correction_state.is_normal:
+            self.corrected_image = None
+        else:
+            self.corrected_image = apply_image_correction(
+                self.geometry_image, self.image_correction_state
+            )
 
     def reset_detection(self) -> None:
         self.detected_image = None
@@ -116,4 +150,6 @@ class CardSide:
         self.rectified_image = None
         self.automatic_perspective_result = None
         self.manual_perspective_result = None
+        self.image_correction_state = ImageCorrectionState()
+        self.corrected_image = None
         self.processed_image = self.original_image.copy()

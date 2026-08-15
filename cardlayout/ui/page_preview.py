@@ -6,12 +6,14 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QWidget
 
 from cardlayout.models.card_side import CardSide, SideName
 from cardlayout.services.layout_engine import LayoutEngine
+from cardlayout.ui.corrections_popover import CorrectionsPopover
 from cardlayout.ui.image_utils import pil_to_qimage
 
 
 class PagePreview(QWidget):
     position_adjust_requested = Signal(str, float)
     position_reset_requested = Signal(str)
+    correction_changed = Signal(str, object)
 
     def __init__(self, engine: LayoutEngine, parent: object | None = None) -> None:
         super().__init__(parent)  # type: ignore[arg-type]
@@ -26,6 +28,7 @@ class PagePreview(QWidget):
         self.setMinimumSize(410, 560)
         self.setMouseTracking(True)
         self._build_position_controls()
+        self._build_corrections_panel()
 
     def _build_position_controls(self) -> None:
         self.position_controls = QFrame(self)
@@ -58,6 +61,15 @@ class PagePreview(QWidget):
         controls_layout.addWidget(self.reset_button)
         controls_layout.addWidget(close_button)
 
+    def _build_corrections_panel(self) -> None:
+        self.corrections_panel = CorrectionsPopover(
+            self, popup=False, columns=3
+        )
+        self.corrections_panel.hide()
+        self.corrections_panel.preset_selected.connect(
+            self._select_correction_preset
+        )
+
     def set_position_offsets(self, front_mm: float, back_mm: float) -> None:
         self._position_offsets["front"] = front_mm
         self._position_offsets["back"] = back_mm
@@ -66,6 +78,29 @@ class PagePreview(QWidget):
     def set_sides(self, front: CardSide | None, back: CardSide | None) -> None:
         self.front = front
         self.back = back
+        if self.selected_side is not None:
+            selected = self._selected_card()
+            if selected is None:
+                self.clear_selection()
+            elif self.corrections_panel.isVisible():
+                self.corrections_panel.set_card(selected)
+        self.update()
+
+    def show_corrections(self, side: SideName) -> None:
+        self.selected_side = side
+        self._update_selection_label()
+        self.position_controls.show()
+        selected = self._selected_card()
+        if selected is not None:
+            self.corrections_panel.set_card(selected)
+            self.corrections_panel.adjustSize()
+            self.corrections_panel.show()
+            self.corrections_panel.raise_()
+            self._position_corrections_panel()
+        else:
+            self.corrections_panel.hide()
+        self.position_controls.raise_()
+        self._position_controls()
         self.update()
 
     def paintEvent(self, event: object) -> None:
@@ -121,12 +156,7 @@ class PagePreview(QWidget):
         if side is None:
             self.clear_selection()
         else:
-            self.selected_side = side
-            self._update_selection_label()
-            self.position_controls.show()
-            self.position_controls.raise_()
-            self._position_controls()
-            self.update()
+            self.show_corrections(side)
         event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
@@ -141,11 +171,27 @@ class PagePreview(QWidget):
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         self._position_controls()
+        self._position_corrections_panel()
 
     def clear_selection(self) -> None:
         self.selected_side = None
         self.position_controls.hide()
+        self.corrections_panel.hide()
         self.update()
+
+    def _select_correction_preset(self, category: str, key: str) -> None:
+        if self.selected_side is None:
+            return
+        state = self.corrections_panel.selected_state(category, key)
+        if state is not None:
+            self.correction_changed.emit(self.selected_side, state)
+
+    def _selected_card(self) -> CardSide | None:
+        if self.selected_side == "front":
+            return self.front
+        if self.selected_side == "back":
+            return self.back
+        return None
 
     def _request_adjustment(self, delta_mm: float) -> None:
         if self.selected_side is not None:
@@ -176,6 +222,18 @@ class PagePreview(QWidget):
             self.height() - height - 14,
             width,
             height,
+        )
+
+    def _position_corrections_panel(self) -> None:
+        if not self.corrections_panel.isVisible():
+            return
+        self.corrections_panel.adjustSize()
+        panel_size = self.corrections_panel.sizeHint()
+        self.corrections_panel.setGeometry(
+            max(12, self.width() - panel_size.width() - 16),
+            18,
+            panel_size.width(),
+            min(panel_size.height(), max(240, self.height() - 92)),
         )
 
     def _page_rect(self) -> QRectF:

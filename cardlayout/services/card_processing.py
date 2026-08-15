@@ -60,5 +60,9 @@ class CardProcessingService:
         card_side.reset_correction()
 
     @staticmethod
+    def reset_user_edits(card_side: CardSide) -> None:
+        card_side.reset_user_edits()
+
+    @staticmethod
     def reset(card_side: CardSide) -> None:
         card_side.reset_detection()

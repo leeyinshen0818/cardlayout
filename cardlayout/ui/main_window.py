@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 from cardlayout.models.card_side import CardSide, SideName
 from cardlayout.models.card_size import MALAYSIA_IC
 from cardlayout.models.detection import CardDetectionResult
+from cardlayout.models.image_correction import ImageCorrectionState
 from cardlayout.models.layout import A4_LAYOUT
 from cardlayout.services.card_detector import CardDetector
 from cardlayout.services.card_processing import CardProcessingService
@@ -93,10 +94,9 @@ class MainWindow(QMainWindow):
         for widget in (self.front_widget, self.back_widget):
             widget.choose_requested.connect(self._choose_side)
             widget.clear_requested.connect(self._clear_side)
-            widget.detect_requested.connect(self._redetect_side)
-            widget.reset_detection_requested.connect(self._reset_detection)
             widget.adjust_corners_requested.connect(self._adjust_corners)
-            widget.reset_correction_requested.connect(self._reset_correction)
+            widget.reset_requested.connect(self._reset_side)
+            widget.corrections_requested.connect(self._show_corrections)
 
         size_caption = QLabel("CARD SIZE")
         size_caption.setObjectName("sectionCaption")
@@ -133,6 +133,7 @@ class MainWindow(QMainWindow):
         self.preview = PagePreview(self.engine)
         self.preview.position_adjust_requested.connect(self._adjust_position)
         self.preview.position_reset_requested.connect(self._reset_position)
+        self.preview.correction_changed.connect(self._set_image_correction)
         self.preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         preview_heading = QHBoxLayout()
@@ -328,6 +329,33 @@ class MainWindow(QMainWindow):
             f"{side.title()} restored to automatic correction", 5000
         )
 
+    def _reset_side(self, side: str) -> None:
+        card = self.front if side == "front" else self.back
+        if card is None:
+            return
+        self.card_processor.reset_user_edits(card)
+        self._refresh()
+        self.statusBar().showMessage(
+            f"{side.title()} restored to automatic processing", 5000
+        )
+
+    def _set_image_correction(
+        self, side: str, state: ImageCorrectionState
+    ) -> None:
+        card = self.front if side == "front" else self.back
+        if card is None:
+            return
+        card.apply_image_correction(state)
+        self._refresh()
+        self.statusBar().showMessage(
+            f"{side.title()} image correction updated", 3000
+        )
+
+    def _show_corrections(self, side: str) -> None:
+        card = self.front if side == "front" else self.back
+        if card is not None:
+            self.preview.show_corrections(side)  # type: ignore[arg-type]
+
     def _reset_detection(self, side: str) -> None:
         card = self.front if side == "front" else self.back
         if card is None:
@@ -454,6 +482,13 @@ class MainWindow(QMainWindow):
             QLabel#sectionCaption, QLabel#sideTitle { color: #475569; font-size: 9pt; font-weight: 700; letter-spacing: 1px; }
             QLabel#fileName { color: #0f172a; font-weight: 600; }
             QLabel#detectionStatus { font-size: 8pt; }
+            QFrame#correctionsPanel { background: #ffffff; border: 1px solid #cbd5e1; border-radius: 9px; }
+            QLabel#correctionsTitle { color: #0f172a; font-size: 11pt; font-weight: 700; border: 0; }
+            QLabel#correctionsHint { color: #64748b; font-size: 8pt; border: 0; }
+            QLabel#correctionsCategory { color: #475569; font-size: 8pt; font-weight: 700; border: 0; margin-top: 4px; }
+            QToolButton { background: #ffffff; color: #475569; border: 1px solid #d8e0ea; border-radius: 6px; padding: 4px; font-size: 8pt; }
+            QToolButton:hover { background: #f1f5fb; border-color: #9fb4d3; }
+            QToolButton:checked { background: #e8f0ff; color: #194b9b; border: 2px solid #4f7fc8; }
             QFrame#previewControls { background: #ffffff; border: 1px solid #b8c5d7; border-radius: 9px; }
             QLabel#previewSelection { color: #194b9b; font-size: 9pt; font-weight: 700; border: 0; }
             QPushButton#previewControlButton { background: #edf3fb; color: #234c86; border: 1px solid #bdcce0; padding: 0 10px; }

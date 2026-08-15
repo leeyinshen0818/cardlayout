@@ -59,7 +59,7 @@ def test_preview_selection_reveals_controls_and_moves_each_side() -> None:
     window.close()
 
 
-def test_import_detects_and_original_toggle_does_not_change_layout_image(
+def test_side_panel_is_clean_and_corrections_reset_without_removing_file(
     tmp_path: Path,
 ) -> None:
     app = QApplication.instance() or QApplication([])
@@ -80,22 +80,63 @@ def test_import_detects_and_original_toggle_does_not_change_layout_image(
     assert window.front.detection_result is not None
     assert window.front.detection_result.success
     assert window.front.detected_image is not None
-    processed = window.front.processed_image
     assert window.front.rectified_image is not None
-    assert window.front_widget._preview_mode == "corrected"
+    original_bytes = window.front.original_image.tobytes()
+    automatic = window.front.automatic_perspective_result
+    assert automatic is not None and automatic.rectified_image is not None
+    automatic_bytes = automatic.rectified_image.tobytes()
 
-    QTest.mouseClick(window.front_widget.original_button, Qt.MouseButton.LeftButton)
+    assert not hasattr(window.front_widget, "original_button")
+    assert not hasattr(window.front_widget, "detected_button")
+    assert not hasattr(window.front_widget, "corrected_button")
+    assert not hasattr(window.front_widget, "redetect_button")
+    assert not hasattr(window.front_widget, "reset_detection_button")
+    assert not hasattr(window.front_widget, "reset_correction_button")
+    assert window.front_widget.choose_button.text() == "Choose Front"
+    assert window.front_widget.clear_button.text() == "Clear"
+    assert window.front_widget.adjust_corners_button.text() == "Adjust Corners"
+    assert window.front_widget.reset_button.text() == "Reset"
+
+    _click_card(window, "front")
+    assert window.preview.corrections_panel.isVisible()
+    assert window.preview.corrections_panel.title.text() == "Corrections · FRONT"
     app.processEvents()
-    assert window.front_widget._preview_mode == "original"
-    assert window.front.processed_image is processed
+    popover = window.preview.corrections_panel
+    assert popover.isVisible()
+    assert popover.parent() is window.preview
+    assert popover.geometry().center().x() > window.preview.width() / 2
+    assert set(popover._buttons) == {
+        ("sharpen", "soft"),
+        ("sharpen", "normal"),
+        ("sharpen", "sharp"),
+        ("sharpen", "sharper"),
+        ("tone", "normal"),
+        ("tone", "bright_10"),
+        ("tone", "bright_20"),
+        ("tone", "bright_contrast"),
+        ("tone", "strong_bright_contrast"),
+    }
 
     QTest.mouseClick(
-        window.front_widget.reset_detection_button, Qt.MouseButton.LeftButton
+        popover._buttons[("sharpen", "sharp")], Qt.MouseButton.LeftButton
     )
     app.processEvents()
-    assert window.front.detected_image is None
-    assert window.front.detection_result is None
-    assert window.front.processed_image.size == (800, 600)
+    assert window.front.image_correction_state.sharpen == "sharp"
+    assert window.front.best_image.tobytes() != automatic_bytes
+    assert window.front.original_image.tobytes() == original_bytes
+    assert window.front_widget.reset_button.isEnabled()
+
+    QTest.mouseClick(window.front_widget.reset_button, Qt.MouseButton.LeftButton)
+    app.processEvents()
+    assert window.front is not None
+    assert window.front.image_correction_state.is_normal
+    assert window.front.detection_result is not None
+    assert window.front.detected_image is not None
+    assert window.front.best_image.tobytes() == automatic_bytes
+
+    QTest.mouseClick(window.front_widget.clear_button, Qt.MouseButton.LeftButton)
+    app.processEvents()
+    assert window.front is None
     window.close()
 
 
@@ -136,6 +177,58 @@ def test_redetect_requires_confirmation_before_replacing_manual_corners(
     assert not window.front.has_manual_correction
     assert window.front.automatic_perspective_result is not None
     assert window.engine.vertical_offset("front") == 5.0
+    window.close()
+
+
+def test_front_and_back_correction_tiles_update_independently(tmp_path: Path) -> None:
+    app = QApplication.instance() or QApplication([])
+    front_image = Image.new("RGB", (428, 270), (110, 135, 160))
+    back_image = Image.new("RGB", (428, 270), (145, 115, 90))
+    front = CardSide(
+        side="front",
+        source_path=tmp_path / "front.png",
+        source_type="image",
+        source_page=None,
+        original_image=front_image,
+        processed_image=front_image.copy(),
+    )
+    back = CardSide(
+        side="back",
+        source_path=tmp_path / "back.png",
+        source_type="image",
+        source_page=None,
+        original_image=back_image,
+        processed_image=back_image.copy(),
+    )
+    window = MainWindow()
+    window.front, window.back = front, back
+    window._refresh()
+    window.show()
+    app.processEvents()
+
+    QTest.mouseClick(window.front_widget.preview, Qt.MouseButton.LeftButton)
+    QTest.mouseClick(
+        window.preview.corrections_panel._buttons[("sharpen", "sharp")],
+        Qt.MouseButton.LeftButton,
+    )
+    app.processEvents()
+    assert front.image_correction_state.sharpen == "sharp"
+    assert back.image_correction_state.is_normal
+
+    window.preview.corrections_panel.hide()
+    _click_card(window, "back")
+    assert window.preview.corrections_panel.title.text() == "Corrections · BACK"
+    QTest.mouseClick(
+        window.preview.corrections_panel._buttons[
+            ("tone", "bright_contrast")
+        ],
+        Qt.MouseButton.LeftButton,
+    )
+    app.processEvents()
+    assert front.image_correction_state.sharpen == "sharp"
+    assert front.image_correction_state.tone == "normal"
+    assert back.image_correction_state.sharpen == "normal"
+    assert back.image_correction_state.tone == "bright_contrast"
     window.close()
 
 
