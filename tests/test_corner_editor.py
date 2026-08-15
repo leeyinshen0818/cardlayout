@@ -113,3 +113,19 @@ def test_apply_produces_a_manual_rectification_result() -> None:
     assert dialog.result.success
     assert dialog.result.method == "manual"
     assert dialog.result.rectified_image is not None
+
+
+def test_compact_corner_editor_keeps_done_action_visible() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = _dialog()
+    dialog.show()
+    app.processEvents()
+
+    assert dialog.apply_button.text() == "Done"
+    assert dialog.apply_button.isVisible()
+    if dialog.compact_ui:
+        assert dialog.minimumWidth() == 720
+        assert dialog.minimumHeight() == 480
+        assert dialog.preview.minimumWidth() == 220
+        assert dialog.canvas.minimumHeight() == 320
+    dialog.close()

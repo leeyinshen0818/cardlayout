@@ -181,9 +181,15 @@ class MainWindow(QMainWindow):
             columns=2,
             show_close=True,
         )
-        self.corrections_sidebar.setMinimumWidth(280)
-        self.corrections_sidebar.setMaximumWidth(320)
-        self.corrections_sidebar.resize(300, self.corrections_sidebar.height())
+        self.corrections_sidebar.set_compact(self.compact_ui)
+        sidebar_minimum = 250 if self.compact_ui else 280
+        sidebar_maximum = 280 if self.compact_ui else 320
+        sidebar_width = 270 if self.compact_ui else 300
+        self.corrections_sidebar.setMinimumWidth(sidebar_minimum)
+        self.corrections_sidebar.setMaximumWidth(sidebar_maximum)
+        self.corrections_sidebar.resize(
+            sidebar_width, self.corrections_sidebar.height()
+        )
         self.corrections_sidebar.preset_selected.connect(
             self._select_correction_preset
         )
@@ -429,7 +435,7 @@ class MainWindow(QMainWindow):
             previous = self.splitter.sizes()
             left_width = previous[0] if previous else 390
             self.corrections_sidebar.show()
-            sidebar_width = 300
+            sidebar_width = 270 if self.compact_ui else 300
             available = max(0, self.splitter.width() - left_width - sidebar_width)
             self.splitter.setSizes(
                 [left_width, max(self.preview.minimumWidth(), available), sidebar_width]

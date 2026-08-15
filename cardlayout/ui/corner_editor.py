@@ -161,20 +161,34 @@ class CornerEditorDialog(QDialog):
         self._automatic_points = automatic_points
         self._result: PerspectiveResult | None = None
         self.setWindowTitle("Adjust Card Corners")
-        self.resize(1120, 720)
-        self.setMinimumSize(820, 560)
+        screen = self.screen()
+        available = screen.availableGeometry() if screen is not None else None
+        screen_width = available.width() if available is not None else 1920
+        screen_height = available.height() if available is not None else 1080
+        self.compact_ui = self._uses_compact_ui(screen_width, screen_height)
+        if self.compact_ui:
+            self.setMinimumSize(720, 480)
+            target_width = min(1040, max(720, screen_width - 40))
+            target_height = min(620, max(480, screen_height - 60))
+        else:
+            self.setMinimumSize(820, 560)
+            target_width = min(1120, max(820, screen_width - 60))
+            target_height = min(720, max(560, screen_height - 80))
+        self.resize(target_width, target_height)
 
         self.canvas = CornerEditorCanvas(image, current_points or automatic_points)
+        if self.compact_ui:
+            self.canvas.setMinimumSize(420, 320)
         self.preview = QLabel("Rectified preview")
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview.setMinimumWidth(300)
+        self.preview.setMinimumWidth(220 if self.compact_ui else 300)
         self.preview.setStyleSheet(
             "background:#eef2f7; border:1px solid #cbd5e1; color:#64748b;"
         )
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.canvas)
         splitter.addWidget(self.preview)
-        splitter.setSizes([750, 350])
+        splitter.setSizes([650, 270] if self.compact_ui else [750, 350])
 
         self.warning = QLabel()
         self.warning.setWordWrap(True)
@@ -199,6 +213,7 @@ class CornerEditorDialog(QDialog):
             | QDialogButtonBox.StandardButton.Cancel
         )
         self.apply_button = self.buttons.button(QDialogButtonBox.StandardButton.Apply)
+        self.apply_button.setText("Done")
         self.buttons.clicked.connect(self._button_clicked)
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
@@ -212,6 +227,10 @@ class CornerEditorDialog(QDialog):
         layout.addWidget(self.warning)
         layout.addWidget(self.buttons)
         self._corners_changed(self.canvas.corners)
+
+    @staticmethod
+    def _uses_compact_ui(screen_width: int, screen_height: int) -> bool:
+        return screen_width < 1680 or screen_height < 950
 
     @property
     def result(self) -> PerspectiveResult | None:

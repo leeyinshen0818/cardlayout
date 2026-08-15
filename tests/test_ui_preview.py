@@ -76,6 +76,19 @@ def test_compact_ui_density_tracks_logical_screen_resolution() -> None:
     assert not MainWindow._uses_compact_ui(1920, 1080)
 
 
+def test_compact_corrections_sidebar_uses_smaller_tiles() -> None:
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    if window.compact_ui:
+        assert window.corrections_sidebar.maximumWidth() == 280
+        for button in window.corrections_sidebar._buttons.values():
+            assert button.width() == 104
+            assert button.height() == 66
+            assert button.iconSize().width() == 68
+            assert button.iconSize().height() == 40
+    window.close()
+
+
 def test_main_window_uses_clean_responsibility_based_layout() -> None:
     app = QApplication.instance() or QApplication([])
     window = MainWindow()

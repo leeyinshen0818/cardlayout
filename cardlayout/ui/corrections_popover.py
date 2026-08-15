@@ -43,6 +43,7 @@ class CorrectionsPopover(QFrame):
         self._card: CardSide | None = None
         self._buttons: dict[tuple[str, str], QToolButton] = {}
         self._thumbnail_cache: dict[tuple[int, str, str], QIcon] = {}
+        self._columns = columns or 4
 
         self.title = QLabel("Corrections")
         self.title.setObjectName("correctionsTitle")
@@ -61,20 +62,20 @@ class CorrectionsPopover(QFrame):
         hint.setObjectName("correctionsHint")
         hint.setWordWrap(True)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 12)
-        layout.setSpacing(6)
-        layout.addLayout(title_row)
-        layout.addWidget(hint)
+        self.content_layout = QVBoxLayout(self)
+        self.content_layout.setContentsMargins(12, 10, 12, 12)
+        self.content_layout.setSpacing(6)
+        self.content_layout.addLayout(title_row)
+        self.content_layout.addWidget(hint)
         self._add_category(
-            layout,
+            self.content_layout,
             "Sharpen / Soften",
             "sharpen",
             [(key, preset.label) for key, preset in SHARPEN_PRESETS.items()],
             columns=columns or 4,
         )
         self._add_category(
-            layout,
+            self.content_layout,
             "Brightness / Contrast",
             "tone",
             [(key, preset.label) for key, preset in TONE_PRESETS.items()],
@@ -86,7 +87,25 @@ class CorrectionsPopover(QFrame):
             "Restore sharpening, brightness, and contrast to Normal"
         )
         self.reset_button.clicked.connect(self.reset_requested.emit)
-        layout.addWidget(self.reset_button)
+        self.content_layout.addWidget(self.reset_button)
+
+    def set_compact(self, compact: bool) -> None:
+        """Reduce sidebar density on smaller logical desktop resolutions."""
+        if compact:
+            self.content_layout.setContentsMargins(9, 7, 9, 9)
+            self.content_layout.setSpacing(4)
+            self.close_button.setFixedSize(24, 24)
+            icon_size = QSize(68, 40)
+            button_size = QSize(104, 66)
+        else:
+            self.content_layout.setContentsMargins(12, 10, 12, 12)
+            self.content_layout.setSpacing(6)
+            self.close_button.setFixedSize(28, 28)
+            icon_size = QSize(76, 46) if self._columns <= 2 else QSize(88, 56)
+            button_size = QSize(122, 76) if self._columns <= 2 else QSize(104, 88)
+        for button in self._buttons.values():
+            button.setIconSize(icon_size)
+            button.setFixedSize(button_size)
 
     def _add_category(
         self,
