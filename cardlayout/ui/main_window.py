@@ -35,6 +35,7 @@ from cardlayout.services.layout_engine import LayoutEngine
 from cardlayout.services.page_renderer import PageRenderer
 from cardlayout.services.pdf_exporter import PDFExporter
 from cardlayout.ui.card_input_widget import CardInputWidget
+from cardlayout.ui.corrections_popover import CorrectionsPopover
 from cardlayout.ui.corner_editor import CornerEditorDialog
 from cardlayout.ui.page_preview import PagePreview
 
@@ -128,32 +129,59 @@ class MainWindow(QMainWindow):
 
         preview_title = QLabel("A4 PORTRAIT PREVIEW")
         preview_title.setObjectName("sectionCaption")
-        preview_note = QLabel("Click Front or Back to adjust its vertical position")
+        preview_note = QLabel("Click Front or Back to select and edit it")
         preview_note.setObjectName("subtitle")
+        self.corrections_button = QPushButton("Corrections")
+        self.corrections_button.setObjectName("compactExpandButton")
+        self.corrections_button.setEnabled(False)
+        self.corrections_button.clicked.connect(self._expand_corrections)
         self.preview = PagePreview(self.engine)
         self.preview.position_adjust_requested.connect(self._adjust_position)
         self.preview.position_reset_requested.connect(self._reset_position)
-        self.preview.correction_changed.connect(self._set_image_correction)
+        self.preview.side_selected.connect(self._open_corrections_for_selection)
+        self.preview.selection_cleared.connect(self._collapse_corrections)
         self.preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         preview_heading = QHBoxLayout()
         preview_heading.addWidget(preview_title)
         preview_heading.addStretch()
         preview_heading.addWidget(preview_note)
+        preview_heading.addWidget(self.corrections_button)
         preview_layout = QVBoxLayout()
         preview_layout.setContentsMargins(18, 18, 18, 18)
         preview_layout.addLayout(preview_heading)
         preview_layout.addWidget(self.preview, 1)
-        preview_panel = QWidget()
-        preview_panel.setObjectName("previewPanel")
-        preview_panel.setLayout(preview_layout)
+        self.preview_panel = QWidget()
+        self.preview_panel.setObjectName("previewPanel")
+        self.preview_panel.setLayout(preview_layout)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(scroll)
-        splitter.addWidget(preview_panel)
-        splitter.setSizes([390, 850])
-        splitter.setCollapsible(0, False)
-        splitter.setCollapsible(1, False)
+        self.corrections_sidebar = CorrectionsPopover(
+            popup=False,
+            columns=2,
+            show_close=True,
+        )
+        self.corrections_sidebar.setMinimumWidth(280)
+        self.corrections_sidebar.setMaximumWidth(320)
+        self.corrections_sidebar.resize(300, self.corrections_sidebar.height())
+        self.corrections_sidebar.preset_selected.connect(
+            self._select_correction_preset
+        )
+        self.corrections_sidebar.collapse_requested.connect(
+            self._collapse_corrections
+        )
+        self.corrections_sidebar.hide()
+
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.addWidget(scroll)
+        self.splitter.addWidget(self.preview_panel)
+        self.splitter.addWidget(self.corrections_sidebar)
+        self.splitter.setSizes([390, 850, 0])
+        self.splitter.setCollapsible(0, False)
+        self.splitter.setCollapsible(1, False)
+        self.splitter.setCollapsible(2, True)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setStretchFactor(2, 0)
 
         export_pdf = QPushButton("Export PDF")
         export_pdf.setObjectName("primaryButton")
@@ -175,7 +203,7 @@ class MainWindow(QMainWindow):
         central_layout.setContentsMargins(0, 0, 0, 0)
         central_layout.setSpacing(0)
         central_layout.addWidget(header_widget)
-        central_layout.addWidget(splitter, 1)
+        central_layout.addWidget(self.splitter, 1)
         central_layout.addWidget(export_widget)
         central = QWidget()
         central.setLayout(central_layout)
@@ -354,7 +382,48 @@ class MainWindow(QMainWindow):
     def _show_corrections(self, side: str) -> None:
         card = self.front if side == "front" else self.back
         if card is not None:
-            self.preview.show_corrections(side)  # type: ignore[arg-type]
+            self.preview.select_side(side)  # type: ignore[arg-type]
+
+    def _expand_corrections(self) -> None:
+        side = self.preview.selected_side
+        if side is None:
+            side = "front" if self.front is not None else "back"
+        card = self.front if side == "front" else self.back
+        if card is not None:
+            self.preview.select_side(side)
+
+    def _open_corrections_for_selection(self, side: str) -> None:
+        card = self.front if side == "front" else self.back
+        if card is None:
+            return
+        self.corrections_sidebar.set_card(card)
+        if not self.corrections_sidebar.isVisible():
+            previous = self.splitter.sizes()
+            left_width = previous[0] if previous else 390
+            self.corrections_sidebar.show()
+            sidebar_width = 300
+            available = max(0, self.splitter.width() - left_width - sidebar_width)
+            self.splitter.setSizes(
+                [left_width, max(self.preview.minimumWidth(), available), sidebar_width]
+            )
+        self.corrections_sidebar.raise_()
+        self.preview.updateGeometry()
+        self.preview.update()
+
+    def _collapse_corrections(self) -> None:
+        if self.preview.selected_side is not None:
+            self.preview.clear_selection(emit=False)
+        self.corrections_sidebar.hide()
+        self.preview.updateGeometry()
+        self.preview.update()
+
+    def _select_correction_preset(self, category: str, key: str) -> None:
+        side = self.preview.selected_side
+        if side is None:
+            return
+        state = self.corrections_sidebar.selected_state(category, key)
+        if state is not None:
+            self._set_image_correction(side, state)
 
     def _reset_detection(self, side: str) -> None:
         card = self.front if side == "front" else self.back
@@ -418,11 +487,19 @@ class MainWindow(QMainWindow):
     def _refresh(self) -> None:
         self.front_widget.set_card(self.front)
         self.back_widget.set_card(self.back)
+        self.corrections_button.setEnabled(
+            self.front is not None or self.back is not None
+        )
         self.preview.set_position_offsets(
             self.engine.vertical_offset("front"),
             self.engine.vertical_offset("back"),
         )
         self.preview.set_sides(self.front, self.back)
+        selected = self.preview.selected_side
+        if self.corrections_sidebar.isVisible() and selected is not None:
+            card = self.front if selected == "front" else self.back
+            if card is not None:
+                self.corrections_sidebar.set_card(card)
 
     def _export_pdf(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Export A4 PDF", "card-layout.pdf", "PDF (*.pdf)")
@@ -494,6 +571,10 @@ class MainWindow(QMainWindow):
             QPushButton#previewControlButton { background: #edf3fb; color: #234c86; border: 1px solid #bdcce0; padding: 0 10px; }
             QPushButton#previewControlButton:hover { background: #dfeafb; }
             QPushButton#previewDoneButton { background: transparent; color: #64748b; border: 0; padding: 0 8px; }
+            QPushButton#compactExpandButton { min-height: 28px; padding: 0 10px; background: #ffffff; color: #234c86; border: 1px solid #bdc9d9; font-size: 8pt; }
+            QPushButton#compactExpandButton:hover { background: #edf3fb; }
+            QPushButton#sidebarCloseButton { min-width: 0; min-height: 0; padding: 0; background: transparent; color: #64748b; border: 0; font-size: 15pt; font-weight: 400; }
+            QPushButton#sidebarCloseButton:hover { background: #eef2f7; color: #0f172a; }
             QLabel#presetValue { background: #e8f0ff; color: #194b9b; border: 1px solid #c8d9f5; border-radius: 7px; padding: 10px; font-weight: 600; }
             QLabel#privacyNote { background: #ecfdf5; color: #166534; border-radius: 7px; padding: 10px; }
             QFrame#cardInput { background: #ffffff; border: 1px solid #dce2ea; border-radius: 9px; }

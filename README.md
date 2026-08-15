@@ -36,7 +36,8 @@ CardLayout is a local desktop application for placing the front and back of a ph
 - Adjust all four source corners manually in a dedicated editor with labeled handles, connecting lines, live rectified preview, mouse-wheel zoom, pan, Fit, 100%, reset-to-automatic, Apply, and Cancel.
 - Reject overlapping, crossing, out-of-bounds, non-convex, or near-zero-area manual corner geometry before it can be applied.
 - Keep manual corrections authoritative until the user resets correction, explicitly accepts re-detection, or imports a new source.
-- Click either side preview to open a compact corrections panel with visual thumbnails for Soft, Normal, Sharp, Sharper, and five conservative brightness/contrast choices.
+- Click either side preview—or the compact Corrections button—to open a collapsible right sidebar with visual thumbnails for Soft, Normal, Sharp, Sharper, and five conservative brightness/contrast choices.
+- Keep the Corrections sidebar outside the A4 viewport: opening it reflows and recenters the fully visible page, while collapsing it returns the width without changing correction, corner, placement, or source state.
 - Keep Front and Back appearance settings independent and render every selection non-destructively from the best geometry-corrected source.
 - Use a single side Reset action to discard manual corners and appearance presets while retaining the imported file and current automatic result.
 - Use the same best-stage priority for A4 preview, PDF, and JPG: manual correction, automatic correction, detected crop, then original.
@@ -92,7 +93,7 @@ Phase 3.2 treats detector corners as mandatory spatial context. It pads the dete
 
 Perspective debug mode additionally exposes rough geometry, search bands, raw edge evidence, inliers and rejected outliers, fitted physical lines, final intersections, per-edge scores/support/residuals, per-corner confidence, rough-to-refined displacement, refinement confidence, and fallback reason. Images remain in memory unless a developer explicitly saves them.
 
-Phase 4 adds manual appearance correction after the geometry pipeline. Preset parameters live in `models/image_correction.py`; thumbnails are generated from small copies, while each selected full-size result is cached from the unchanged geometry source. `CardSide.best_image` remains the shared source for the side preview, A4 preview, JPG export, and PDF export. The normal left panel exposes only Choose, Clear, Adjust Corners, and Reset; technical detection stages remain available internally and through debug data.
+Phase 4 adds manual appearance correction after the geometry pipeline. Preset parameters live in `models/image_correction.py`; thumbnails are generated from small copies, while each selected full-size result is cached from the unchanged geometry source. A single selected-side state coordinates the left previews, A4 cards, independent position controls, and collapsible right Corrections sidebar. Sidebar visibility changes only the splitter viewport, so the A4 page refits without changing physical layout coordinates or image-processing state. `CardSide.best_image` remains the shared source for the side preview, A4 preview, JPG export, and PDF export. The normal left panel exposes only Choose, Clear, Adjust Corners, and Reset; technical detection stages remain available internally and through debug data.
 
 ## Not implemented yet
 

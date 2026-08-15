@@ -7,6 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import cv2
 import numpy as np
+import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -97,14 +98,19 @@ def test_side_panel_is_clean_and_corrections_reset_without_removing_file(
     assert window.front_widget.adjust_corners_button.text() == "Adjust Corners"
     assert window.front_widget.reset_button.text() == "Reset"
 
+    assert not window.corrections_sidebar.isVisible()
+    preview_width_closed = window.preview_panel.width()
     _click_card(window, "front")
-    assert window.preview.corrections_panel.isVisible()
-    assert window.preview.corrections_panel.title.text() == "Corrections · FRONT"
     app.processEvents()
-    popover = window.preview.corrections_panel
-    assert popover.isVisible()
-    assert popover.parent() is window.preview
-    assert popover.geometry().center().x() > window.preview.width() / 2
+    assert window.corrections_sidebar.isVisible()
+    assert window.corrections_sidebar.title.text() == "Corrections · FRONT"
+    popover = window.corrections_sidebar
+    assert popover.parent() is window.splitter
+    assert window.preview_panel.width() < preview_width_closed
+    assert popover.geometry().left() >= window.preview_panel.geometry().right()
+    assert window.preview._page_rect().center().x() == pytest.approx(
+        window.preview.width() / 2, abs=1
+    )
     assert set(popover._buttons) == {
         ("sharpen", "soft"),
         ("sharpen", "normal"),
@@ -208,18 +214,23 @@ def test_front_and_back_correction_tiles_update_independently(tmp_path: Path) ->
 
     QTest.mouseClick(window.front_widget.preview, Qt.MouseButton.LeftButton)
     QTest.mouseClick(
-        window.preview.corrections_panel._buttons[("sharpen", "sharp")],
+        window.corrections_sidebar._buttons[("sharpen", "sharp")],
         Qt.MouseButton.LeftButton,
     )
     app.processEvents()
     assert front.image_correction_state.sharpen == "sharp"
     assert back.image_correction_state.is_normal
 
-    window.preview.corrections_panel.hide()
-    _click_card(window, "back")
-    assert window.preview.corrections_panel.title.text() == "Corrections · BACK"
     QTest.mouseClick(
-        window.preview.corrections_panel._buttons[
+        window.corrections_sidebar.close_button, Qt.MouseButton.LeftButton
+    )
+    app.processEvents()
+    assert not window.corrections_sidebar.isVisible()
+    assert front.image_correction_state.sharpen == "sharp"
+    _click_card(window, "back")
+    assert window.corrections_sidebar.title.text() == "Corrections · BACK"
+    QTest.mouseClick(
+        window.corrections_sidebar._buttons[
             ("tone", "bright_contrast")
         ],
         Qt.MouseButton.LeftButton,
@@ -229,6 +240,89 @@ def test_front_and_back_correction_tiles_update_independently(tmp_path: Path) ->
     assert front.image_correction_state.tone == "normal"
     assert back.image_correction_state.sharpen == "normal"
     assert back.image_correction_state.tone == "bright_contrast"
+    window.close()
+
+
+def test_sidebar_reflows_preview_switches_side_and_preserves_state(
+    tmp_path: Path,
+) -> None:
+    app = QApplication.instance() or QApplication([])
+    front_image = Image.new("RGB", (428, 270), (105, 135, 165))
+    back_image = Image.new("RGB", (428, 270), (70, 115, 160))
+    window = MainWindow()
+    window.front = CardSide(
+        side="front",
+        source_path=tmp_path / "front.png",
+        source_type="image",
+        source_page=None,
+        original_image=front_image,
+        processed_image=front_image.copy(),
+    )
+    window.back = CardSide(
+        side="back",
+        source_path=tmp_path / "back.png",
+        source_type="image",
+        source_page=None,
+        original_image=back_image,
+        processed_image=back_image.copy(),
+    )
+    window._refresh()
+    window.show()
+    app.processEvents()
+
+    layout_before = window.engine.calculate()
+    closed_width = window.preview_panel.width()
+    assert not window.corrections_sidebar.isVisible()
+
+    QTest.mouseClick(window.corrections_button, Qt.MouseButton.LeftButton)
+    app.processEvents()
+    expanded_width = window.preview_panel.width()
+    assert window.preview.selected_side == "front"
+    assert window.corrections_sidebar.title.text() == "Corrections · FRONT"
+    assert window.corrections_sidebar.isVisible()
+    assert expanded_width < closed_width
+    assert window.corrections_sidebar.geometry().left() >= (
+        window.preview_panel.geometry().right()
+    )
+
+    _click_card(window, "back")
+    assert window.preview.selected_side == "back"
+    assert window.corrections_sidebar.isVisible()
+    assert window.corrections_sidebar.title.text() == "Corrections · BACK"
+    QTest.mouseClick(
+        window.corrections_sidebar._buttons[("tone", "bright_10")],
+        Qt.MouseButton.LeftButton,
+    )
+    app.processEvents()
+    assert window.back.image_correction_state.tone == "bright_10"
+    assert window.front.image_correction_state.is_normal
+
+    QTest.mouseClick(
+        window.corrections_sidebar.close_button, Qt.MouseButton.LeftButton
+    )
+    app.processEvents()
+    assert not window.corrections_sidebar.isVisible()
+    assert window.preview.selected_side is None
+    assert window.preview_panel.width() > expanded_width
+    assert window.back.image_correction_state.tone == "bright_10"
+    layout_after = window.engine.calculate()
+    assert layout_after.front == layout_before.front
+    assert layout_after.back == layout_before.back
+    assert window.preview._page_rect().center().x() == pytest.approx(
+        window.preview.width() / 2, abs=1
+    )
+
+    QTest.mouseClick(window.corrections_button, Qt.MouseButton.LeftButton)
+    app.processEvents()
+    assert window.corrections_sidebar.isVisible()
+    assert window.preview.selected_side == "front"
+
+    window.resize(1050, 720)
+    app.processEvents()
+    assert window.corrections_sidebar.geometry().left() >= (
+        window.preview_panel.geometry().right()
+    )
+    assert window.preview.width() >= window.preview.minimumWidth()
     window.close()
 
 
