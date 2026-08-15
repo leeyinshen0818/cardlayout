@@ -20,17 +20,23 @@ class CardProcessingService:
         )
 
     def detect(self, card_side: CardSide) -> CardDetectionResult:
-        result = self.detector.detect(card_side.original_image)
+        processing_raster = card_side.processing_raster
+        result = self.detector.detect(processing_raster)
         card_side.apply_detection(result)
         if result.success and len(result.polygon_points) == 4:
             inferred_count = int(result.debug_info.get("inferred_edge_count", 0))
             correction = self.perspective_corrector.correct(
-                card_side.original_image,
+                processing_raster,
                 result.polygon_points,
                 detector_confidence=result.confidence,
                 inferred_corner_count=inferred_count,
                 method="automatic",
                 refine=True,
+                pdf_frame_background=(
+                    card_side.source_diagnostics.get("outer_background_color")
+                    if card_side.source_type == "pdf"
+                    else None
+                ),
             )
             card_side.apply_automatic_correction(correction)
         return result
@@ -41,7 +47,7 @@ class CardProcessingService:
         points: tuple[tuple[float, float], ...],
     ):
         result = self.perspective_corrector.correct(
-            card_side.original_image,
+            card_side.processing_raster,
             points,
             detector_confidence=(
                 card_side.detection_result.confidence

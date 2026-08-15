@@ -297,6 +297,24 @@ def test_sidebar_reflows_preview_switches_side_and_preserves_state(
     assert window.back.image_correction_state.tone == "bright_10"
     assert window.front.image_correction_state.is_normal
 
+    layout_before_reset = window.engine.calculate()
+    QTest.mouseClick(
+        window.corrections_sidebar.reset_button, Qt.MouseButton.LeftButton
+    )
+    app.processEvents()
+    assert window.back.image_correction_state.is_normal
+    assert window.corrections_sidebar.isVisible()
+    assert window.preview.selected_side == "back"
+    assert not window.corrections_sidebar.reset_button.isEnabled()
+    assert window.engine.calculate() == layout_before_reset
+
+    QTest.mouseClick(
+        window.corrections_sidebar._buttons[("tone", "bright_10")],
+        Qt.MouseButton.LeftButton,
+    )
+    app.processEvents()
+    assert window.back.image_correction_state.tone == "bright_10"
+
     QTest.mouseClick(
         window.corrections_sidebar.close_button, Qt.MouseButton.LeftButton
     )

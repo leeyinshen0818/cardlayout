@@ -37,12 +37,13 @@ CardLayout is a local desktop application for placing the front and back of a ph
 - Reject overlapping, crossing, out-of-bounds, non-convex, or near-zero-area manual corner geometry before it can be applied.
 - Keep manual corrections authoritative until the user resets correction, explicitly accepts re-detection, or imports a new source.
 - Click either side preview—or the compact Corrections button—to open a collapsible right sidebar with visual thumbnails for Soft, Normal, Sharp, Sharper, and five conservative brightness/contrast choices.
+- Reset the selected side's sharpening, brightness, and contrast directly from the Corrections sidebar without resetting its detection, corners, or A4 position.
 - Keep the Corrections sidebar outside the A4 viewport: opening it reflows and recenters the fully visible page, while collapsing it returns the width without changing correction, corner, placement, or source state.
 - Keep Front and Back appearance settings independent and render every selection non-destructively from the best geometry-corrected source.
 - Use a single side Reset action to discard manual corners and appearance presets while retaining the imported file and current automatic result.
 - Use the same best-stage priority for A4 preview, PDF, and JPG: manual correction, automatic correction, detected crop, then original.
 
-The current preset is **Malaysia IC — 85.6 × 54 mm**. Both cards are centered horizontally. The default pair is shifted 25 mm lower than the original Phase 1 position: Front starts 61.6 mm from the page top and Back starts at 135.6 mm, leaving a 20 mm gap. Each side can then be moved independently while remaining inside the A4 page.
+The current preset is **Malaysia IC — 85.6 × 54 mm**. Both cards are centered horizontally. The default pair is shifted 15 mm lower than the original Phase 1 position: Front starts 51.6 mm from the page top and Back starts at 125.6 mm, leaving a 20 mm gap. Each side can then be moved independently while remaining inside the A4 page.
 
 ## Privacy
 

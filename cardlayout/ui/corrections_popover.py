@@ -27,6 +27,7 @@ class CorrectionsPopover(QFrame):
 
     preset_selected = Signal(str, str)
     collapse_requested = Signal()
+    reset_requested = Signal()
 
     def __init__(
         self,
@@ -79,6 +80,13 @@ class CorrectionsPopover(QFrame):
             [(key, preset.label) for key, preset in TONE_PRESETS.items()],
             columns=columns or 3,
         )
+        self.reset_button = QPushButton("Reset corrections")
+        self.reset_button.setObjectName("sidebarResetButton")
+        self.reset_button.setToolTip(
+            "Restore sharpening, brightness, and contrast to Normal"
+        )
+        self.reset_button.clicked.connect(self.reset_requested.emit)
+        layout.addWidget(self.reset_button)
 
     def _add_category(
         self,
@@ -145,6 +153,7 @@ class CorrectionsPopover(QFrame):
             button.setChecked(
                 key == (state.sharpen if category == "sharpen" else state.tone)
             )
+        self.reset_button.setEnabled(not state.is_normal)
 
     def selected_state(self, category: str, key: str) -> ImageCorrectionState | None:
         if self._card is None:

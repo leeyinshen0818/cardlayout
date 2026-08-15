@@ -49,6 +49,6 @@ A4_LAYOUT = LayoutPreset(
     name="A4 portrait — stacked cards",
     page_width_mm=210.0,
     page_height_mm=297.0,
-    top_offset_mm=61.6,
+    top_offset_mm=51.6,
     vertical_gap_mm=20.0,
 )

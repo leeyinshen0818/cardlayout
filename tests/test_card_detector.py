@@ -249,6 +249,11 @@ def test_low_texture_back_and_detailed_front_use_same_outer_geometry(detector) -
         assert detected == pytest.approx(expected, abs=8)
     assert np.max(np.abs(np.subtract(front.bounding_box, back.bounding_box))) <= 8
     assert back.debug_info["selected_candidate"]["interior_complexity_score"] < 0.10
+    for result in (front, back):
+        selected = result.debug_info["selected_candidate"]
+        assert 0.0 <= selected["full_card_boundary_score"] <= 1.0
+        assert 0.0 <= selected["candidate_coverage_score"] <= 1.0
+        assert selected["internal_subregion_penalty"] == 0.0
 
 
 def test_strong_internal_rectangle_does_not_beat_physical_perimeter(detector) -> None:
@@ -260,3 +265,25 @@ def test_strong_internal_rectangle_does_not_beat_physical_perimeter(detector) ->
     selected = result.debug_info["selected_candidate"]
     assert selected["line_support_score"] >= 0.75
     assert selected["area_ratio"] >= 0.25
+    assert selected["full_card_boundary_score"] >= 0.70
+    assert any(
+        candidate["internal_subregion_penalty"] > 0
+        and "internal_subregion" in candidate["rejection_reasons"]
+        for candidate in result.debug_info["candidates"]
+    )
+
+
+def test_clear_low_texture_blue_back_on_light_background_keeps_full_card(detector) -> None:
+    pixels = np.full((760, 1080, 3), (235, 237, 239), dtype=np.uint8)
+    card = np.asarray(((190, 160), (900, 185), (885, 632), (175, 607)), np.int32)
+    cv2.fillConvexPoly(pixels, card, (65, 112, 164))
+    cv2.polylines(pixels, [card], True, (54, 92, 138), 3, cv2.LINE_AA)
+    cv2.circle(pixels, (245, 215), 18, (76, 125, 178), -1, cv2.LINE_AA)
+
+    result = detector.detect(Image.fromarray(pixels))
+
+    assert result.success
+    assert result.bounding_box == pytest.approx((174, 159, 901, 633), abs=8)
+    selected = result.debug_info["selected_candidate"]
+    assert selected["area_ratio"] >= 0.35
+    assert selected["full_card_boundary_score"] >= 0.68

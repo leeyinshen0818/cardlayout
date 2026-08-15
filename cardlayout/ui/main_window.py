@@ -169,6 +169,9 @@ class MainWindow(QMainWindow):
         self.corrections_sidebar.collapse_requested.connect(
             self._collapse_corrections
         )
+        self.corrections_sidebar.reset_requested.connect(
+            self._reset_image_corrections
+        )
         self.corrections_sidebar.hide()
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -425,6 +428,11 @@ class MainWindow(QMainWindow):
         if state is not None:
             self._set_image_correction(side, state)
 
+    def _reset_image_corrections(self) -> None:
+        side = self.preview.selected_side
+        if side is not None:
+            self._set_image_correction(side, ImageCorrectionState())
+
     def _reset_detection(self, side: str) -> None:
         card = self.front if side == "front" else self.back
         if card is None:
@@ -575,6 +583,8 @@ class MainWindow(QMainWindow):
             QPushButton#compactExpandButton:hover { background: #edf3fb; }
             QPushButton#sidebarCloseButton { min-width: 0; min-height: 0; padding: 0; background: transparent; color: #64748b; border: 0; font-size: 15pt; font-weight: 400; }
             QPushButton#sidebarCloseButton:hover { background: #eef2f7; color: #0f172a; }
+            QPushButton#sidebarResetButton { min-height: 30px; background: #ffffff; color: #526176; border: 1px solid #cbd4e0; font-size: 8pt; }
+            QPushButton#sidebarResetButton:hover { background: #edf3fb; }
             QLabel#presetValue { background: #e8f0ff; color: #194b9b; border: 1px solid #c8d9f5; border-radius: 7px; padding: 10px; font-weight: 600; }
             QLabel#privacyNote { background: #ecfdf5; color: #166534; border-radius: 7px; padding: 10px; }
             QFrame#cardInput { background: #ffffff; border: 1px solid #dce2ea; border-radius: 9px; }

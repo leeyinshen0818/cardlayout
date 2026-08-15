@@ -20,6 +20,11 @@ def test_png_loads_and_flattens_transparency(sample_png: Path) -> None:
     assert side.side == "back"
     assert side.source_type == "image"
     assert side.processed_image.mode == "RGB"
+    # The source is RGBA (20, 90, 190, 210); transparency is composited onto
+    # white rather than silently discarded by a plain RGB conversion.
+    assert side.processed_image.getpixel((0, 0)) == pytest.approx(
+        (61, 119, 201), abs=1
+    )
 
 
 def test_one_page_pdf_loads_front_and_leaves_back_empty(one_page_pdf: Path) -> None:
@@ -67,4 +72,3 @@ def test_unsupported_format_is_rejected(tmp_path: Path) -> None:
     unsupported.write_bytes(b"BM")
     with pytest.raises(InputLoadError, match="JPG"):
         InputLoader().load_side(unsupported, "front")
-

@@ -65,6 +65,9 @@ class _Candidate:
     area_ratio: float
     observed_ratio: float
     border_touches: int
+    full_card_boundary_score: float = 0.0
+    candidate_coverage_score: float = 0.0
+    internal_subregion_penalty: float = 0.0
     candidate_id: str = ""
     contains_candidates: tuple[str, ...] = ()
     contained_by_candidates: tuple[str, ...] = ()
@@ -102,6 +105,9 @@ class _Candidate:
             "border_contrast_score": round(self.border_contrast_score, 4),
             "foreground_score": round(self.foreground_score, 4),
             "nested_candidate_score": round(self.nested_candidate_score, 4),
+            "full_card_boundary_score": round(self.full_card_boundary_score, 4),
+            "candidate_coverage_score": round(self.candidate_coverage_score, 4),
+            "internal_subregion_penalty": round(self.internal_subregion_penalty, 4),
             "background_penalty": round(self.background_penalty, 4),
             "oversize_penalty": round(self.oversize_penalty, 4),
             "uniform_surface_penalty": round(self.uniform_surface_penalty, 4),
@@ -190,7 +196,9 @@ class CardDetector:
         all_candidates.extend(fast.candidates)
         fused = self._contextual_rank(self._fuse_candidates(all_candidates), original)
 
-        if self._looks_already_cropped(fast, fused):
+        if self._looks_already_cropped(
+            fast, fused, original_width, original_height
+        ):
             result = CardDetectionResult(
                 success=True,
                 confidence=0.86,
@@ -1080,6 +1088,30 @@ class CardDetector:
 
     def _score_candidate(self, candidate: _Candidate) -> None:
         weights = self.config.weights
+        # Full-card evidence is intentionally geometric.  Appearance remains a
+        # secondary tie-breaker so a plain card back is not discarded in favor
+        # of a detailed chip, portrait frame, logo, or printed rectangle.
+        candidate.full_card_boundary_score = float(
+            np.clip(
+                0.29 * candidate.edge_score
+                + 0.24 * candidate.line_support_score
+                + 0.21 * candidate.geometry_score
+                + 0.18 * candidate.ratio_score
+                + 0.08 * candidate.agreement_score,
+                0.0,
+                1.0,
+            )
+        )
+        if not candidate.contextual_scored:
+            candidate.candidate_coverage_score = float(
+                np.clip(
+                    0.42 * candidate.area_score
+                    + 0.32 * candidate.ratio_score
+                    + 0.26 * candidate.geometry_score,
+                    0.0,
+                    1.0,
+                )
+            )
         candidate.total_score = float(
             np.clip(
                 candidate.area_score * weights.area
@@ -1100,6 +1132,9 @@ class CardDetector:
                 - candidate.uniform_surface_penalty
                 - candidate.small_area_penalty
                 - candidate.ratio_penalty
+                + 0.06 * (candidate.full_card_boundary_score - 0.5)
+                + 0.04 * (candidate.candidate_coverage_score - 0.5)
+                - candidate.internal_subregion_penalty
                 + candidate.partial_evidence_bonus
                 - candidate.border_touches * self.config.border_touch_penalty,
                 0.0,
@@ -1248,6 +1283,7 @@ class CardDetector:
                 )
             )
             candidate.nested_candidate_score = 0.0
+            candidate.internal_subregion_penalty = 0.0
             candidate.oversize_penalty = self._oversize_penalty(candidate.area_ratio)
             candidate.uniform_surface_penalty = self._uniform_surface_penalty(
                 candidate.area_ratio, complexity
@@ -1375,12 +1411,32 @@ class CardDetector:
                 )
                 parent_is_plausible_perimeter = (
                     parent.inferred_edges == 0
+                    and bool(
+                        {"contour", "rotated_rect"} & parent.strategy_groups
+                    )
                     and parent.area_ratio <= self.config.oversize_start_ratio
                     and parent.geometry_score >= 0.72
                     and parent.ratio_score >= max(0.68, child.ratio_score - 0.16)
                     and parent.edge_score >= 0.62
                 )
                 if parent_is_plausible_perimeter:
+                    parent.full_card_boundary_score = max(
+                        parent.full_card_boundary_score,
+                        float(
+                            np.clip(
+                                0.42 * parent.edge_score
+                                + 0.26 * parent.ratio_score
+                                + 0.20 * parent.line_support_score
+                                + 0.12 * parent.geometry_score,
+                                0.0,
+                                1.0,
+                            )
+                        ),
+                    )
+                    parent.candidate_coverage_score = max(
+                        parent.candidate_coverage_score,
+                        float(np.clip(0.68 + 0.20 * size_score + 0.12 * parent.area_score, 0.0, 1.0)),
+                    )
                     parent.nested_candidate_score = max(
                         parent.nested_candidate_score,
                         float(
@@ -1394,6 +1450,36 @@ class CardDetector:
                             )
                         ),
                     )
+                    child_fraction = polygon_areas[child_index] / max(
+                        polygon_areas[parent_index], 1.0
+                    )
+                    if child_fraction <= 0.68:
+                        inwardness = float(
+                            np.clip((0.68 - child_fraction) / 0.50, 0.0, 1.0)
+                        )
+                        perimeter_advantage = max(
+                            0.0,
+                            parent.full_card_boundary_score
+                            - child.full_card_boundary_score
+                            + 0.12,
+                        )
+                        child.internal_subregion_penalty = max(
+                            child.internal_subregion_penalty,
+                            float(
+                                np.clip(
+                                    0.07
+                                    + 0.10 * inwardness
+                                    + 0.06 * perimeter_advantage,
+                                    0.0,
+                                    0.22,
+                                )
+                            ),
+                        )
+                        child.candidate_coverage_score = min(
+                            child.candidate_coverage_score,
+                            float(np.clip(child_fraction / 0.68, 0.0, 1.0)),
+                        )
+                        rejection_sets[child_index].add("internal_subregion")
                 if (
                     child.inferred_edges == 0
                     and child.area_ratio >= self.config.area_plateau_min_ratio
@@ -1721,6 +1807,9 @@ class CardDetector:
             area_ratio=candidate.area_ratio,
             observed_ratio=candidate.observed_ratio,
             border_touches=candidate.border_touches,
+            full_card_boundary_score=candidate.full_card_boundary_score,
+            candidate_coverage_score=candidate.candidate_coverage_score,
+            internal_subregion_penalty=candidate.internal_subregion_penalty,
             candidate_id=candidate.candidate_id,
             contains_candidates=tuple(candidate.contains_candidates),
             contained_by_candidates=tuple(candidate.contained_by_candidates),
@@ -1787,6 +1876,9 @@ class CardDetector:
             # Two strong, genuinely card-like regions are a review case, not
             # evidence that neither region exists.
             confidence = max(confidence, self.config.medium_confidence)
+            # A near-tie between two distinct, fully card-like regions must
+            # remain a review case even when both absolute scores are high.
+            confidence = min(confidence, self.config.high_confidence - 0.01)
             ambiguity_review_floor = True
         if best.area_ratio < self.config.tiny_area_ratio:
             confidence = min(confidence - 0.08, 0.52)
@@ -1828,12 +1920,65 @@ class CardDetector:
         return False
 
     def _looks_already_cropped(
-        self, pass_result: _PassResult, candidates: list[_Candidate]
+        self,
+        pass_result: _PassResult,
+        candidates: list[_Candidate],
+        original_width: int,
+        original_height: int,
     ) -> bool:
         height, width = pass_result.working_rgb.shape[:2]
         canvas_ratio = max(width, height) / min(width, height)
         if abs(log(canvas_ratio / self._target_ratio)) > 0.065:
             return False
+        # A PDF frame preprocessor (or a tightly captured image) can leave a
+        # small safety band around an otherwise full-card raster.  A large,
+        # ratio-correct contour inset on every side is direct full-card
+        # evidence even when a low-texture back has almost no internal edges.
+        for candidate in candidates[:5]:
+            left, top, right, bottom = candidate.bounding_box
+            near_perimeter = (
+                left <= original_width * 0.07
+                and top <= original_height * 0.07
+                and right >= original_width * 0.93
+                and bottom >= original_height * 0.93
+            )
+            if (
+                candidate.area_ratio >= 0.78
+                and candidate.geometry_score >= 0.85
+                and candidate.ratio_score >= 0.85
+                and candidate.rectangularity_score >= 0.85
+                and near_perimeter
+            ):
+                return True
+        corner_size = max(3, int(round(min(width, height) * 0.035)))
+        corner_samples = np.asarray(
+            [
+                pass_result.working_rgb[:corner_size, :corner_size].mean(axis=(0, 1)),
+                pass_result.working_rgb[:corner_size, -corner_size:].mean(axis=(0, 1)),
+                pass_result.working_rgb[-corner_size:, -corner_size:].mean(axis=(0, 1)),
+                pass_result.working_rgb[-corner_size:, :corner_size].mean(axis=(0, 1)),
+            ],
+            dtype=np.float32,
+        )
+        corner_color = corner_samples.mean(axis=0)
+        corner_consistency = float(
+            np.linalg.norm(corner_samples - corner_color, axis=1).max()
+        )
+        center = pass_result.working_rgb[
+            height // 4 : height * 3 // 4,
+            width // 4 : width * 3 // 4,
+        ]
+        center_color = np.median(center.reshape(-1, 3), axis=0)
+        corner_hsv = cv2.cvtColor(
+            np.uint8([[np.clip(corner_color, 0, 255)]]), cv2.COLOR_RGB2HSV
+        )[0, 0]
+        if (
+            corner_consistency <= 12.0
+            and int(corner_hsv[1]) <= 55
+            and int(corner_hsv[2]) >= 180
+            and float(np.linalg.norm(center_color - corner_color)) >= 28.0
+        ):
+            return True
         if candidates and candidates[0].area_ratio >= 0.075:
             return False
         if any(

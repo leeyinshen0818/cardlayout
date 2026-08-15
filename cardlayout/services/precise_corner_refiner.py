@@ -220,6 +220,14 @@ class PreciseCornerRefiner:
                 )
             intersections.append(point)
         local_refined = np.asarray(intersections, dtype=np.float32)
+        local_refined, active_lines, reconstructed_corner_count = (
+            self._recover_single_corner_outlier(
+                local_rough, local_refined, active_lines, final_edges, short_side
+            )
+        )
+        if reconstructed_corner_count:
+            for index, line in enumerate(active_lines):
+                final_edges[index].line = tuple(float(value) for value in line)
         valid, fallback_reason = self._validate_refinement(
             local_rough, local_refined, final_edges
         )
@@ -237,6 +245,7 @@ class PreciseCornerRefiner:
             roi,
             detector_inferred_edges,
             success=valid,
+            reconstructed_corner_count=reconstructed_corner_count,
             diagnostic_refined=attempted_refined,
             fallback_reason=(
                 fallback_reason
@@ -691,6 +700,77 @@ class PreciseCornerRefiner:
             points.append(point)
         return np.asarray(points, dtype=np.float32)
 
+    def _recover_single_corner_outlier(
+        self,
+        rough: np.ndarray,
+        refined: np.ndarray,
+        lines: list[np.ndarray],
+        edges: list[EdgeFitResult],
+        short_side: float,
+    ) -> tuple[np.ndarray, list[np.ndarray], int]:
+        """Repair one inward corner by anchoring its weaker edge at the stable end.
+
+        This is deliberately local: three mutually consistent corners are kept,
+        and the questionable adjacent edge is rebuilt from rough-perimeter
+        geometry.  It therefore cannot turn a local finger/corner defect into a
+        smaller internal rectangle.
+        """
+        distances = np.linalg.norm(refined - rough, axis=1)
+        ordered = np.argsort(distances)
+        corner = int(ordered[-1])
+        others = distances[ordered[:-1]]
+        threshold = max(
+            short_side * 0.052,
+            float(np.median(others)) * 1.85 + short_side * 0.008,
+        )
+        inward_vector = rough.mean(axis=0) - rough[corner]
+        movement = refined[corner] - rough[corner]
+        if distances[corner] <= threshold or float(np.dot(movement, inward_vector)) <= 0:
+            return refined, lines, 0
+
+        adjacent = ((corner - 1) % 4, corner)
+        suspect = min(adjacent, key=lambda index: edges[index].score)
+        if (
+            not edges[suspect].inferred
+            and edges[suspect].score >= self.config.strong_outer_boundary_score
+        ):
+            return refined, lines, 0
+
+        other_corner = (corner - 1) % 4 if suspect == (corner - 1) % 4 else (corner + 1) % 4
+        rough_line = self.line_from_points(rough[suspect], rough[(suspect + 1) % 4])
+        anchor = refined[other_corner]
+        rebuilt = rough_line.copy()
+        rebuilt[2] = -float(np.dot(rebuilt[:2], anchor))
+        trial_lines = [line.copy() for line in lines]
+        trial_lines[suspect] = rebuilt
+        trial = self._intersections_for_lines(trial_lines)
+        if trial is None or not cv2.isContourConvex(np.round(trial).astype(np.int32)):
+            return refined, lines, 0
+        trial_distances = np.linalg.norm(trial - rough, axis=1)
+        rough_area = max(abs(float(cv2.contourArea(rough))), 1.0)
+        original_area_error = abs(abs(float(cv2.contourArea(refined))) / rough_area - 1.0)
+        trial_area_error = abs(abs(float(cv2.contourArea(trial))) / rough_area - 1.0)
+        if (
+            trial_distances[corner] < distances[corner] * 0.82
+            and trial_area_error <= original_area_error + 0.025
+        ):
+            edges[suspect].inferred = True
+            edges[suspect].score = min(edges[suspect].score, 0.40)
+            return trial, trial_lines, 1
+        return refined, lines, 0
+
+    @staticmethod
+    def _quad_dimensions(points: np.ndarray) -> tuple[float, float]:
+        width = 0.5 * (
+            float(np.linalg.norm(points[1] - points[0]))
+            + float(np.linalg.norm(points[2] - points[3]))
+        )
+        height = 0.5 * (
+            float(np.linalg.norm(points[2] - points[1]))
+            + float(np.linalg.norm(points[3] - points[0]))
+        )
+        return width, height
+
     def _signed_edge_displacements(
         self, rough: np.ndarray, refined: np.ndarray
     ) -> tuple[float, float, float, float]:
@@ -721,6 +801,18 @@ class PreciseCornerRefiner:
             return False, "Refined card area disagrees with detection geometry."
         if area_ratio > self.config.maximum_refined_area_expansion:
             return False, "background_edge_hijack: excessive_area_expansion."
+        rough_width, rough_height = self._quad_dimensions(rough)
+        refined_width, refined_height = self._quad_dimensions(refined)
+        width_ratio = refined_width / max(rough_width, 1.0)
+        height_ratio = refined_height / max(rough_height, 1.0)
+        if width_ratio < self.config.minimum_refined_width_fraction:
+            return False, "width_collapse: refined width moved inside the rough perimeter."
+        if height_ratio < self.config.minimum_refined_height_fraction:
+            return False, "height_collapse: refined height moved inside the rough perimeter."
+        if width_ratio > self.config.maximum_refined_dimension_expansion:
+            return False, "background_edge_hijack: excessive_width_expansion."
+        if height_ratio > self.config.maximum_refined_dimension_expansion:
+            return False, "background_edge_hijack: excessive_height_expansion."
         short_side = self._short_side(rough)
         distances = np.linalg.norm(refined - rough, axis=1)
         if float(distances.max()) > short_side * self.config.maximum_corner_displacement_fraction:
@@ -788,6 +880,7 @@ class PreciseCornerRefiner:
         success: bool,
         fallback_reason: str | None,
         diagnostic_refined: np.ndarray | None = None,
+        reconstructed_corner_count: int = 0,
     ) -> CornerRefinementResult:
         edge_scores = [edge.score for edge in edges]
         corner_confidences = tuple(
@@ -798,6 +891,9 @@ class PreciseCornerRefiner:
         displacements = np.linalg.norm(diagnostic - rough, axis=1)
         rough_area = max(abs(float(cv2.contourArea(rough))), 1.0)
         refined_area_ratio = abs(float(cv2.contourArea(diagnostic))) / rough_area
+        refined_area = abs(float(cv2.contourArea(diagnostic)))
+        rough_width, rough_height = self._quad_dimensions(rough)
+        refined_width, refined_height = self._quad_dimensions(diagnostic)
         rough_ratio = self._quad_ratio(rough)
         refined_ratio = self._quad_ratio(diagnostic)
         short_side = max(self._short_side(rough), 1.0)
@@ -874,6 +970,22 @@ class PreciseCornerRefiner:
             "roi_scale": round(scale, 5),
             "strong_edge_count": strong_count,
             "refined_area_ratio": round(refined_area_ratio, 5),
+            "rough_area": round(rough_area, 3),
+            "refined_area": round(refined_area, 3),
+            "area_ratio": round(refined_area_ratio, 5),
+            "rough_width": round(rough_width, 3),
+            "refined_width": round(refined_width, 3),
+            "width_ratio": round(refined_width / max(rough_width, 1.0), 5),
+            "rough_height": round(rough_height, 3),
+            "refined_height": round(refined_height, 3),
+            "height_ratio": round(refined_height / max(rough_height, 1.0), 5),
+            "rough_center": tuple(round(float(value), 3) for value in rough.mean(axis=0)),
+            "refined_center": tuple(round(float(value), 3) for value in diagnostic.mean(axis=0)),
+            "corner_displacements_px": {
+                name: round(float(value), 3)
+                for name, value in zip(("top_left", "top_right", "bottom_right", "bottom_left"), displacements)
+            },
+            "reconstructed_corner_count": reconstructed_corner_count,
             "center_displacement_px": round(
                 float(np.linalg.norm(diagnostic.mean(axis=0) - rough.mean(axis=0))), 3
             ),
@@ -920,6 +1032,7 @@ class PreciseCornerRefiner:
             edge_confidences=tuple(edge.score for edge in converted_edges),
             corner_confidences=corner_confidences,
             confidence=confidence,
+            reconstructed_corner_count=reconstructed_corner_count,
             roi_box=roi_box,
             fallback_reason=fallback_reason,
             debug_info=metrics,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from PIL import Image
 
@@ -34,6 +34,15 @@ class CardSide:
         default_factory=ImageCorrectionState
     )
     corrected_image: Image.Image | None = None
+    detector_input_image: Image.Image | None = None
+    original_pdf_render: Image.Image | None = None
+    normalized_pdf_raster: Image.Image | None = None
+    source_diagnostics: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def processing_raster(self) -> Image.Image:
+        """Full-quality canonical raster shared by detection and perspective."""
+        return self.detector_input_image or self.original_image
 
     @property
     def display_name(self) -> str:

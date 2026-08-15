@@ -27,10 +27,10 @@ def test_cards_are_horizontally_centered(engine: LayoutEngine) -> None:
 
 def test_vertical_positions_and_gap(engine: LayoutEngine) -> None:
     page = engine.calculate()
-    assert page.front.y == pytest.approx(61.6)
-    assert page.front.bottom == pytest.approx(115.6)
-    assert page.back.y == pytest.approx(135.6)
-    assert page.back.bottom == pytest.approx(189.6)
+    assert page.front.y == pytest.approx(51.6)
+    assert page.front.bottom == pytest.approx(105.6)
+    assert page.back.y == pytest.approx(125.6)
+    assert page.back.bottom == pytest.approx(179.6)
     assert page.back.y - page.front.bottom == pytest.approx(20.0)
 
 
@@ -38,8 +38,8 @@ def test_front_and_back_can_move_independently(engine: LayoutEngine) -> None:
     engine.adjust_vertical_offset("front", 7.0)
     engine.adjust_vertical_offset("back", -4.0)
     page = engine.calculate()
-    assert page.front.y == pytest.approx(68.6)
-    assert page.back.y == pytest.approx(131.6)
+    assert page.front.y == pytest.approx(58.6)
+    assert page.back.y == pytest.approx(121.6)
     assert engine.vertical_offset("front") == 7.0
     assert engine.vertical_offset("back") == -4.0
 
@@ -56,7 +56,7 @@ def test_vertical_position_can_be_reset(engine: LayoutEngine) -> None:
     engine.adjust_vertical_offset("front", 12.0)
     engine.reset_vertical_offset("front")
     assert engine.vertical_offset("front") == 0.0
-    assert engine.calculate().front.y == pytest.approx(61.6)
+    assert engine.calculate().front.y == pytest.approx(51.6)
 
 
 def test_a4_pixel_dimensions_at_300_dpi(engine: LayoutEngine) -> None:

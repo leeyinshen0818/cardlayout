@@ -45,6 +45,7 @@ class CornerRefinementResult:
     edge_confidences: tuple[float, ...] = ()
     corner_confidences: tuple[float, ...] = ()
     confidence: float = 0.0
+    reconstructed_corner_count: int = 0
     roi_box: tuple[int, int, int, int] | None = None
     fallback_reason: str | None = None
     debug_info: dict[str, Any] = field(default_factory=dict)
@@ -68,8 +69,12 @@ class PerspectiveConfig:
     maximum_corner_displacement_fraction: float = 0.10
     maximum_edge_displacement_fraction: float = 0.08
     maximum_center_displacement_fraction: float = 0.055
+    maximum_residual_top_adjustment_fraction: float = 0.035
     maximum_refined_area_expansion: float = 1.18
     minimum_refined_area_fraction: float = 0.72
+    minimum_refined_width_fraction: float = 0.78
+    minimum_refined_height_fraction: float = 0.78
+    maximum_refined_dimension_expansion: float = 1.18
     collapse_area_fraction: float = 0.88
     collapse_inward_displacement_fraction: float = 0.022
     strong_outer_boundary_score: float = 0.70
@@ -106,10 +111,18 @@ class PerspectiveConfig:
             raise ValueError("Maximum edge displacement fraction is invalid")
         if not 0 < self.maximum_center_displacement_fraction < 0.20:
             raise ValueError("Maximum center displacement fraction is invalid")
+        if not 0 < self.maximum_residual_top_adjustment_fraction < 0.10:
+            raise ValueError("Residual top-adjustment limit is invalid")
         if not 1 < self.hijack_area_expansion <= self.maximum_refined_area_expansion < 1.5:
             raise ValueError("Refinement area-expansion limits are invalid")
         if not 0.5 < self.minimum_refined_area_fraction < 1:
             raise ValueError("Refinement area-contraction limit is invalid")
+        if not 0.5 < self.minimum_refined_width_fraction < 1:
+            raise ValueError("Refinement width-contraction limit is invalid")
+        if not 0.5 < self.minimum_refined_height_fraction < 1:
+            raise ValueError("Refinement height-contraction limit is invalid")
+        if not 1 < self.maximum_refined_dimension_expansion < 1.5:
+            raise ValueError("Refinement dimension-expansion limit is invalid")
         if not self.minimum_refined_area_fraction < self.collapse_area_fraction < 1:
             raise ValueError("Refinement collapse threshold is invalid")
         if not 0 < self.collapse_inward_displacement_fraction < 0.10:
@@ -141,6 +154,7 @@ class PerspectiveResult:
     method: PerspectiveMethod = "automatic"
     warning: str | None = None
     inferred_corner_count: int = 0
+    reconstructed_corner_count: int = 0
     output_dimensions: tuple[int, int] | None = None
     transform_matrix: tuple[tuple[float, float, float], ...] = ()
     corner_confidences: tuple[float, ...] = ()

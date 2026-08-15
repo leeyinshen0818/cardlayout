@@ -147,6 +147,22 @@ def test_partial_finger_occlusion_uses_separated_edge_support() -> None:
     assert np.linalg.norm(refined - true, axis=1).mean() < 7.0
 
 
+@pytest.mark.parametrize("corner_index", [0, 1, 2, 3])
+def test_one_weak_corner_preserves_full_card_and_recovers_intersection(
+    corner_index: int,
+) -> None:
+    image, true, rough = _card_scene()
+    center = tuple(np.round(true[corner_index]).astype(int))
+    cv2.circle(image, center, 52, (186, 133, 105), -1, cv2.LINE_AA)
+
+    result = PreciseCornerRefiner(target_ratio=TARGET_RATIO).refine(image, rough)
+    refined = np.asarray(result.refined_corners)
+
+    assert _quad_area(refined) / _quad_area(rough) >= 0.90
+    assert np.linalg.norm(refined - true, axis=1).mean() < 9.0
+    assert np.linalg.norm(refined[corner_index] - true[corner_index]) < 15.0
+
+
 def test_one_missing_boundary_retains_rough_edge_and_reduces_confidence() -> None:
     image = np.full((650, 900, 3), (35, 42, 50), dtype=np.uint8)
     image[0:510, 150:750] = (190, 220, 235)
@@ -213,6 +229,21 @@ def test_debug_mode_exposes_rough_bands_evidence_fits_and_metrics() -> None:
     }
     assert set(result.debug_info["edge_scores"]) == {"top", "right", "bottom", "left"}
     assert len(result.debug_info["rough_to_refined_corner_distances"]) == 4
+    assert {
+        "rough_area",
+        "refined_area",
+        "area_ratio",
+        "rough_width",
+        "refined_width",
+        "width_ratio",
+        "rough_height",
+        "refined_height",
+        "height_ratio",
+        "rough_center",
+        "refined_center",
+        "corner_displacements_px",
+        "reconstructed_corner_count",
+    } <= result.debug_info.keys()
 
 
 def _weak_blue_back(
@@ -317,6 +348,55 @@ def test_incorrect_inward_refinement_is_rejected_without_strong_outer_evidence()
 
     assert not valid
     assert "collapse" in (reason or "").lower()
+
+
+@pytest.mark.parametrize(
+    ("refined", "expected_reason"),
+    [
+        (
+            np.asarray(((190, 100), (810, 100), (810, 604), (190, 604)), np.float32),
+            "width_collapse",
+        ),
+        (
+            np.asarray(((100, 165), (900, 165), (900, 539), (100, 539)), np.float32),
+            "height_collapse",
+        ),
+    ],
+)
+def test_single_dimension_collapse_is_rejected(
+    refined: np.ndarray, expected_reason: str
+) -> None:
+    rough = np.asarray(((100, 100), (900, 100), (900, 604), (100, 604)), np.float32)
+    valid, reason = PreciseCornerRefiner()._validate_refinement(rough, refined)
+    assert not valid
+    assert expected_reason in (reason or "")
+
+
+def test_three_good_corners_recover_one_inward_bottom_left_outlier() -> None:
+    refiner = PreciseCornerRefiner()
+    rough = np.asarray(((100, 100), (900, 100), (900, 604), (100, 604)), np.float32)
+    lines = [
+        refiner.line_from_points((100, 100), (900, 100)),
+        refiner.line_from_points((900, 100), (900, 604)),
+        refiner.line_from_points((900, 604), (100, 546)),
+        refiner.line_from_points((100, 604), (100, 100)),
+    ]
+    proposed = refiner._intersections_for_lines(lines)
+    assert proposed is not None
+    edges = [
+        EdgeFitResult(name="top", success=True, line=tuple(lines[0]), score=0.82),
+        EdgeFitResult(name="right", success=True, line=tuple(lines[1]), score=0.82),
+        EdgeFitResult(name="bottom", success=True, line=tuple(lines[2]), score=0.39),
+        EdgeFitResult(name="left", success=True, line=tuple(lines[3]), score=0.78),
+    ]
+
+    recovered, _, count = refiner._recover_single_corner_outlier(
+        rough, proposed, lines, edges, refiner._short_side(rough)
+    )
+
+    assert count == 1
+    assert np.linalg.norm(recovered[3] - rough[3]) < 1.0
+    assert np.allclose(recovered[:3], rough[:3], atol=1.0)
 
 
 def test_failed_automatic_refinement_preserves_rough_quad_and_requests_review() -> None:
