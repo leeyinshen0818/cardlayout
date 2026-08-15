@@ -54,12 +54,27 @@ class MainWindow(QMainWindow):
         self.jpg_exporter = ImageExporter(self.renderer)
         self.pdf_exporter = PDFExporter(self.renderer)
 
+        screen = QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen is not None else None
+        screen_width = available.width() if available is not None else 1920
+        screen_height = available.height() if available is not None else 1080
+        self.compact_ui = self._uses_compact_ui(screen_width, screen_height)
+
         self.setWindowTitle("CardLayout")
-        self.setMinimumSize(1050, 720)
-        self.resize(1240, 820)
+        if self.compact_ui:
+            self.setMinimumSize(900, 600)
+            self.resize(min(1180, screen_width), min(760, screen_height))
+        else:
+            self.setMinimumSize(1050, 720)
+            self.resize(1240, 820)
         self.setAcceptDrops(True)
         self._build_ui()
         self._apply_style()
+
+    @staticmethod
+    def _uses_compact_ui(screen_width: int, screen_height: int) -> bool:
+        """Choose density from Qt logical pixels, including Windows DPI scaling."""
+        return screen_width < 1680 or screen_height < 950
 
     def _build_ui(self) -> None:
         title = QLabel("CardLayout")
@@ -73,7 +88,11 @@ class MainWindow(QMainWindow):
         self.swap_button.clicked.connect(self._swap_sides)
 
         header = QHBoxLayout()
-        header.setContentsMargins(22, 10, 22, 10)
+        header_margin = 16 if self.compact_ui else 22
+        header_vertical = 6 if self.compact_ui else 10
+        header.setContentsMargins(
+            header_margin, header_vertical, header_margin, header_vertical
+        )
         header.addWidget(title)
         header.addStretch()
 
@@ -84,6 +103,7 @@ class MainWindow(QMainWindow):
         self.front_widget = CardInputWidget("front")
         self.back_widget = CardInputWidget("back")
         for widget in (self.front_widget, self.back_widget):
+            widget.set_compact(self.compact_ui)
             widget.choose_requested.connect(self._choose_side)
             widget.clear_requested.connect(self._clear_side)
             widget.adjust_corners_requested.connect(self._adjust_corners)
@@ -102,8 +122,11 @@ class MainWindow(QMainWindow):
         import_caption.setObjectName("sectionCaption")
 
         controls_layout = QVBoxLayout()
-        controls_layout.setContentsMargins(18, 18, 18, 18)
-        controls_layout.setSpacing(13)
+        controls_margin = 12 if self.compact_ui else 18
+        controls_layout.setContentsMargins(
+            controls_margin, controls_margin, controls_margin, controls_margin
+        )
+        controls_layout.setSpacing(8 if self.compact_ui else 13)
         controls_layout.addWidget(import_caption)
         controls_layout.addWidget(self.pdf_button)
         controls_layout.addWidget(self.front_widget)
@@ -121,8 +144,8 @@ class MainWindow(QMainWindow):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(controls)
-        scroll.setMinimumWidth(360)
-        scroll.setMaximumWidth(420)
+        scroll.setMinimumWidth(300 if self.compact_ui else 360)
+        scroll.setMaximumWidth(350 if self.compact_ui else 420)
 
         preview_title = QLabel("A4 PORTRAIT PREVIEW")
         preview_title.setObjectName("sectionCaption")
@@ -131,6 +154,7 @@ class MainWindow(QMainWindow):
         self.corrections_button.setEnabled(False)
         self.corrections_button.clicked.connect(self._expand_corrections)
         self.preview = PagePreview(self.engine)
+        self.preview.set_compact(self.compact_ui)
         self.preview.position_adjust_requested.connect(self._adjust_position)
         self.preview.position_reset_requested.connect(self._reset_position)
         self.preview.side_selected.connect(self._open_corrections_for_selection)
@@ -142,7 +166,10 @@ class MainWindow(QMainWindow):
         preview_heading.addStretch()
         preview_heading.addWidget(self.corrections_button)
         preview_layout = QVBoxLayout()
-        preview_layout.setContentsMargins(18, 18, 18, 18)
+        preview_margin = 12 if self.compact_ui else 18
+        preview_layout.setContentsMargins(
+            preview_margin, preview_margin, preview_margin, preview_margin
+        )
         preview_layout.addLayout(preview_heading)
         preview_layout.addWidget(self.preview, 1)
         self.preview_panel = QWidget()
@@ -172,7 +199,7 @@ class MainWindow(QMainWindow):
         self.splitter.addWidget(scroll)
         self.splitter.addWidget(self.preview_panel)
         self.splitter.addWidget(self.corrections_sidebar)
-        self.splitter.setSizes([390, 850, 0])
+        self.splitter.setSizes([325 if self.compact_ui else 390, 850, 0])
         self.splitter.setCollapsible(0, False)
         self.splitter.setCollapsible(1, False)
         self.splitter.setCollapsible(2, True)
@@ -187,7 +214,11 @@ class MainWindow(QMainWindow):
         export_jpg.setObjectName("primaryButton")
         export_jpg.clicked.connect(self._export_jpg)
         export_bar = QHBoxLayout()
-        export_bar.setContentsMargins(22, 12, 22, 12)
+        export_horizontal = 16 if self.compact_ui else 22
+        export_vertical = 8 if self.compact_ui else 12
+        export_bar.setContentsMargins(
+            export_horizontal, export_vertical, export_horizontal, export_vertical
+        )
         export_bar.addWidget(QLabel("Print exported PDF at Actual Size / 100%"))
         export_bar.addStretch()
         export_bar.addWidget(export_jpg)
@@ -573,8 +604,7 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, title, message)
 
     def _apply_style(self) -> None:
-        self.setStyleSheet(
-            """
+        style = """
             QMainWindow, QWidget { background: #f4f6f9; color: #1e293b; font-family: "Segoe UI"; font-size: 10pt; }
             QFrame#header, QFrame#exportBar { background: #ffffff; border: 0; }
             QFrame#header { border-bottom: 1px solid #dce2ea; }
@@ -623,4 +653,18 @@ class MainWindow(QMainWindow):
             QSplitter::handle { background: #dce2ea; width: 1px; }
             QStatusBar { background: #ffffff; color: #64748b; border-top: 1px solid #dce2ea; }
             """
-        )
+        if self.compact_ui:
+            style += """
+                QMainWindow, QWidget { font-size: 9pt; }
+                QLabel#appTitle { font-size: 16pt; }
+                QLabel#sectionCaption, QLabel#sideTitle { font-size: 8pt; }
+                QLabel#fileName { font-size: 9pt; }
+                QLabel#presetValue, QLabel#privacyNote { padding: 7px; }
+                QPushButton { min-height: 28px; padding: 0 10px; }
+                QPushButton#compactExpandButton, QPushButton#swapButton {
+                    min-height: 25px; padding: 0 8px;
+                }
+                QPushButton#detectionButton { min-height: 25px; padding: 0 6px; }
+                QStatusBar { font-size: 8pt; }
+            """
+        self.setStyleSheet(style)

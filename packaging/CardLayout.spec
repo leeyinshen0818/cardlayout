@@ -11,7 +11,9 @@ a = Analysis(
     [str(project_root / "cardlayout" / "__main__.py")],
     pathex=[str(project_root)],
     binaries=[],
-    datas=[],
+    datas=[
+        (str(project_root / "icon" / "credit-card.ico"), "icon"),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

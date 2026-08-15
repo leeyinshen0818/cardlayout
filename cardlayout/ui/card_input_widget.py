@@ -95,19 +95,32 @@ class CardInputWidget(QFrame):
         )
         self.reset_button.clicked.connect(lambda: self.reset_requested.emit(self.side))
 
-        edit_buttons = QHBoxLayout()
-        edit_buttons.setSpacing(7)
-        edit_buttons.addWidget(self.adjust_corners_button, 1)
-        edit_buttons.addWidget(self.reset_button, 1)
+        self.edit_buttons = QHBoxLayout()
+        self.edit_buttons.setSpacing(7)
+        self.edit_buttons.addWidget(self.adjust_corners_button, 1)
+        self.edit_buttons.addWidget(self.reset_button, 1)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(9)
-        layout.addLayout(heading)
-        layout.addWidget(self.file_label)
-        layout.addWidget(self.preview, 1)
-        layout.addLayout(file_buttons)
-        layout.addLayout(edit_buttons)
+        self.content_layout = QVBoxLayout(self)
+        self.content_layout.setContentsMargins(16, 14, 16, 14)
+        self.content_layout.setSpacing(9)
+        self.content_layout.addLayout(heading)
+        self.content_layout.addWidget(self.file_label)
+        self.content_layout.addWidget(self.preview, 1)
+        self.content_layout.addLayout(file_buttons)
+        self.content_layout.addLayout(self.edit_buttons)
+
+    def set_compact(self, compact: bool) -> None:
+        """Adjust only UI density; card state and processing remain untouched."""
+        if compact:
+            self.preview.setMinimumHeight(88)
+            self.content_layout.setContentsMargins(11, 9, 11, 9)
+            self.content_layout.setSpacing(6)
+            self.edit_buttons.setSpacing(5)
+        else:
+            self.preview.setMinimumHeight(115)
+            self.content_layout.setContentsMargins(16, 14, 16, 14)
+            self.content_layout.setSpacing(9)
+            self.edit_buttons.setSpacing(7)
 
     def set_card(self, card: CardSide | None) -> None:
         self._card = card

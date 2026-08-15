@@ -17,6 +17,7 @@ from cardlayout.models.card_side import CardSide
 from cardlayout.models.detection import CardDetectionResult
 from cardlayout.models.perspective import PerspectiveResult
 import cardlayout.ui.main_window as main_window_module
+import cardlayout.__main__ as app_module
 from cardlayout.ui.main_window import MainWindow
 
 
@@ -30,6 +31,49 @@ def _click_card(window: MainWindow, side: str) -> None:
         pos=target.center().toPoint(),
     )
     QApplication.processEvents()
+
+
+def test_application_starts_maximized(monkeypatch) -> None:
+    events: list[str] = []
+
+    class _Application:
+        def __init__(self, arguments) -> None:
+            del arguments
+
+        def setApplicationName(self, name: str) -> None:
+            del name
+
+        def setOrganizationName(self, name: str) -> None:
+            del name
+
+        def setWindowIcon(self, icon) -> None:
+            assert icon == "application-icon"
+            events.append("application-icon")
+
+        def exec(self) -> int:
+            return 0
+
+    class _Window:
+        def setWindowIcon(self, icon) -> None:
+            assert icon == "application-icon"
+            events.append("window-icon")
+
+        def showMaximized(self) -> None:
+            events.append("maximized")
+
+    monkeypatch.setattr(app_module, "QApplication", _Application)
+    monkeypatch.setattr(app_module, "MainWindow", _Window)
+    monkeypatch.setattr(app_module, "QIcon", lambda path: "application-icon")
+
+    assert app_module.main() == 0
+    assert events == ["application-icon", "window-icon", "maximized"]
+
+
+def test_compact_ui_density_tracks_logical_screen_resolution() -> None:
+    assert MainWindow._uses_compact_ui(1600, 900)
+    assert MainWindow._uses_compact_ui(1536, 864)
+    assert MainWindow._uses_compact_ui(1280, 720)
+    assert not MainWindow._uses_compact_ui(1920, 1080)
 
 
 def test_main_window_uses_clean_responsibility_based_layout() -> None:

@@ -29,6 +29,12 @@ class PagePreview(QWidget):
         self.setMouseTracking(True)
         self._build_position_controls()
 
+    def set_compact(self, compact: bool) -> None:
+        if compact:
+            self.setMinimumSize(350, 470)
+        else:
+            self.setMinimumSize(410, 560)
+
     def _build_position_controls(self) -> None:
         self.position_controls = QFrame(self)
         self.position_controls.setObjectName("previewControls")
