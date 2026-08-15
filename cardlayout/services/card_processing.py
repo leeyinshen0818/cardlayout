@@ -22,6 +22,8 @@ class CardProcessingService:
     def detect(self, card_side: CardSide) -> CardDetectionResult:
         processing_raster = card_side.processing_raster
         result = self.detector.detect(processing_raster)
+        pipeline_diagnostics = self._pipeline_diagnostics(card_side)
+        result.debug_info.update(pipeline_diagnostics)
         card_side.apply_detection(result)
         if result.success and len(result.polygon_points) == 4:
             inferred_count = int(result.debug_info.get("inferred_edge_count", 0))
@@ -32,14 +34,24 @@ class CardProcessingService:
                 inferred_corner_count=inferred_count,
                 method="automatic",
                 refine=True,
-                pdf_frame_background=(
-                    card_side.source_diagnostics.get("outer_background_color")
-                    if card_side.source_type == "pdf"
-                    else None
-                ),
             )
+            correction.debug_info.update(pipeline_diagnostics)
             card_side.apply_automatic_correction(correction)
         return result
+
+    @staticmethod
+    def _pipeline_diagnostics(card_side: CardSide) -> dict[str, object]:
+        """Expose source metadata without allowing it to affect geometry logic."""
+        source = card_side.source_diagnostics
+        keys = (
+            "source_type",
+            "source_format",
+            "normalized_width",
+            "normalized_height",
+            "pdf_trim_box",
+            "pdf_residual_border_flags",
+        )
+        return {key: source.get(key) for key in keys}
 
     def apply_manual_correction(
         self,

@@ -203,6 +203,15 @@ def test_debug_reasoning_contains_lines_scales_scores_and_timing() -> None:
     assert debug["candidate_count"] >= 1
     assert debug["best_score"] is not None
     assert "second_best_score" in debug
+    assert {
+        "selected_candidate_score",
+        "second_candidate_score",
+        "full_card_boundary_score",
+        "coverage_score",
+        "ratio_score",
+        "internal_subregion_penalty",
+        "background_penalty",
+    } <= debug.keys()
     assert debug["processing_time_ms"] > 0
     assert debug["scale_used"]
     assert "inferred_edge_count" in debug
@@ -210,6 +219,7 @@ def test_debug_reasoning_contains_lines_scales_scores_and_timing() -> None:
     assert set(debug["stage_images"]) >= {
         "original",
         "candidate_scores",
+        "selected_rough_card_region",
         "detailed_hybrid_lines",
         "detailed_hybrid_edges",
     }

@@ -957,6 +957,10 @@ class PreciseCornerRefiner:
             "edge_confidences": {
                 edge.name: round(edge.score, 4) for edge in converted_edges
             },
+            **{
+                f"{edge.name}_confidence": round(edge.score, 4)
+                for edge in converted_edges
+            },
             "rough_to_refined_corner_distances": tuple(
                 round(float(value), 3) for value in displacements
             ),
@@ -986,6 +990,7 @@ class PreciseCornerRefiner:
                 for name, value in zip(("top_left", "top_right", "bottom_right", "bottom_left"), displacements)
             },
             "reconstructed_corner_count": reconstructed_corner_count,
+            "corner_reconstruction_count": reconstructed_corner_count,
             "center_displacement_px": round(
                 float(np.linalg.norm(diagnostic.mean(axis=0) - rough.mean(axis=0))), 3
             ),
@@ -1102,8 +1107,12 @@ class PreciseCornerRefiner:
         evidence_image = np.clip(evidence * 255, 0, 255).astype(np.uint8)
         return {
             "rough_and_search_bands": Image.fromarray(bands).copy(),
+            "edge_search_bands": Image.fromarray(bands).copy(),
             "raw_edge_evidence": Image.fromarray(evidence_image).copy(),
             "fitted_edges_and_intersections": Image.fromarray(fit).copy(),
+            "rejected_geometry": (
+                Image.fromarray(fit).copy() if not success else Image.new("RGB", (1, 1))
+            ),
         }
 
     def _roi_box(

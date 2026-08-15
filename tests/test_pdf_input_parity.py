@@ -103,17 +103,23 @@ def _normalized_polygon(result, size: tuple[int, int]) -> np.ndarray:
     return points
 
 
-def test_pdf_and_png_use_canonical_rgb_normalization(tmp_path: Path) -> None:
+def test_jpg_png_and_pdf_use_canonical_rgb_normalization(tmp_path: Path) -> None:
     image = _card_raster()
+    jpg = _write_image(tmp_path / "card.jpg", image, "JPEG")
     png = _write_image(tmp_path / "card.png", image)
     pdf = _write_pdf(tmp_path / "card.pdf", [image])
     loader = InputLoader(debug=True)
 
+    jpg_side = loader.load_side(jpg, "front").card_side
     image_side = loader.load_side(png, "front").card_side
     pdf_side = loader.load_side(pdf, "front").card_side
 
+    assert jpg_side.processing_raster.mode == "RGB"
     assert image_side.processing_raster.mode == "RGB"
     assert pdf_side.processing_raster.mode == "RGB"
+    assert jpg_side.source_diagnostics["source_format"] == "jpg"
+    assert image_side.source_diagnostics["source_format"] == "png"
+    assert pdf_side.source_diagnostics["source_format"] == "pdf"
     assert image_side.detector_input_image is not None
     assert pdf_side.detector_input_image is not None
     assert pdf_side.original_pdf_render is not None
@@ -151,14 +157,16 @@ def test_pdf_render_and_exported_raster_have_exact_ab_detector_parity(
     assert pdf_result.confidence == pytest.approx(image_result.confidence, abs=1e-8)
 
 
-def test_equivalent_png_and_pdf_detection_and_perspective_are_geometrically_equal(
+def test_equivalent_jpg_png_and_pdf_detection_and_perspective_are_geometrically_equal(
     tmp_path: Path,
 ) -> None:
     image = _card_raster()
+    jpg = _write_image(tmp_path / "front.jpg", image, "JPEG")
     png = _write_image(tmp_path / "front.png", image)
     pdf = _write_pdf(tmp_path / "front.pdf", [image])
     loader = InputLoader()
     sides = [
+        loader.load_side(jpg, "front").card_side,
         loader.load_side(png, "front").card_side,
         loader.load_side(pdf, "front").card_side,
     ]
@@ -170,12 +178,20 @@ def test_equivalent_png_and_pdf_detection_and_perspective_are_geometrically_equa
         _normalized_polygon(result, side.processing_raster.size)
         for result, side in zip(results, sides)
     ]
-    assert np.max(np.abs(polygons[0] - polygons[1])) < 0.012
-    assert results[0].confidence == pytest.approx(results[1].confidence, abs=0.08)
+    for polygon in polygons[1:]:
+        assert np.max(np.abs(polygons[0] - polygon)) < 0.012
+    for result in results[1:]:
+        assert results[0].confidence == pytest.approx(result.confidence, abs=0.08)
     assert all(side.automatic_perspective_result is not None for side in sides)
     corrected_sizes = [side.geometry_image.size for side in sides]
     corrected_ratios = [width / height for width, height in corrected_sizes]
-    assert corrected_ratios[0] == pytest.approx(corrected_ratios[1], abs=0.012)
+    for ratio in corrected_ratios[1:]:
+        assert corrected_ratios[0] == pytest.approx(ratio, abs=0.012)
+    normalized_aspects = [
+        side.processing_raster.width / side.processing_raster.height
+        for side in sides
+    ]
+    assert max(normalized_aspects) - min(normalized_aspects) < 0.002
 
 
 def test_two_page_pdf_preserves_front_back_order_and_detects_low_texture_back(
@@ -201,6 +217,29 @@ def test_two_page_pdf_preserves_front_back_order_and_detects_low_texture_back(
     for side, result in ((loaded.front, front), (loaded.back, back)):
         assert side.source_diagnostics["detector_input_width"] == side.processing_raster.width
         assert result.debug_info["selected_candidate"]["area_ratio"] >= 0.33
+
+    standalone_paths = [
+        _write_image(tmp_path / "front-equivalent.jpg", _card_raster("front"), "JPEG"),
+        _write_image(tmp_path / "back-equivalent.png", _card_raster("back")),
+    ]
+    standalone_sides = [
+        InputLoader().load_side(standalone_paths[0], "front").card_side,
+        InputLoader().load_side(standalone_paths[1], "back").card_side,
+    ]
+    standalone_results = [processor.detect(side) for side in standalone_sides]
+    for pdf_side, pdf_result, image_side, image_result in zip(
+        (loaded.front, loaded.back),
+        (front, back),
+        standalone_sides,
+        standalone_results,
+    ):
+        assert pdf_side is not None and image_result.success
+        pdf_polygon = _normalized_polygon(pdf_result, pdf_side.processing_raster.size)
+        image_polygon = _normalized_polygon(image_result, image_side.processing_raster.size)
+        # The PDF path deliberately preserves a small safety margin around a
+        # trimmed page image, so normalized page coordinates may differ by up
+        # to that margin while still selecting the same physical perimeter.
+        assert np.max(np.abs(pdf_polygon - image_polygon)) < 0.04
 
 
 def test_separate_pdf_and_mixed_inputs_keep_source_state_independent(
@@ -439,30 +478,7 @@ def test_residual_top_strip_is_removed_on_bounded_second_pass(
     CardProcessingService(CardDetector(MALAYSIA_IC)).detect(side)
     correction = side.automatic_perspective_result
     assert correction is not None and correction.success
-    assert correction.debug_info["post_rectify_top_white_ratio"] < 0.20
+    assert correction.debug_info["source_type"] == "pdf"
+    assert correction.debug_info["pdf_residual_border_flags"]["top"] is True
     refined = np.asarray(correction.refined_points)
     assert abs(float(refined[0, 1] - refined[1, 1])) < 2.0
-
-
-def test_post_rectify_top_validation_moves_only_top_corners() -> None:
-    pixels = np.full((650, 1000, 3), (255, 255, 255), dtype=np.uint8)
-    pixels[20:] = (82, 142, 194)
-    cv2.line(pixels, (0, 20), (999, 20), (35, 68, 102), 3)
-    points = ((0.0, 0.0), (999.0, 0.0), (999.0, 649.0), (0.0, 649.0))
-
-    result = PerspectiveCorrector(MALAYSIA_IC).correct(
-        Image.fromarray(pixels),
-        points,
-        detector_confidence=0.86,
-        method="automatic",
-        refine=False,
-        pdf_frame_background=(255, 255, 255),
-    )
-
-    assert result.success
-    refined = np.asarray(result.refined_points)
-    assert result.debug_info["selected_top_edge_offset"] > 0
-    assert result.debug_info["post_rectify_top_white_ratio"] < 0.20
-    assert refined[0, 1] > 5 and refined[1, 1] > 5
-    assert refined[2] == pytest.approx(points[2], abs=0.01)
-    assert refined[3] == pytest.approx(points[3], abs=0.01)

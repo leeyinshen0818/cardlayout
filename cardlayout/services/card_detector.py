@@ -253,16 +253,47 @@ class CardDetector:
             )
 
         best = fused[0]
-        second = fused[1] if len(fused) > 1 else None
+        # Candidates already classified as a contained/internal reconstruction
+        # are supporting evidence for the selected full perimeter, not an
+        # independent competing card.  Counting them as the runner-up makes a
+        # low-texture full card fail solely because its own partial edges were
+        # also reconstructed as smaller quads.
+        subordinate_reasons = {
+            "internal_subregion",
+            "weaker_inferred_geometry",
+            "complete_candidate_preferred",
+        }
+        second = next(
+            (
+                candidate
+                for candidate in fused[1:]
+                if not subordinate_reasons.intersection(candidate.rejection_reasons)
+            ),
+            None,
+        )
         confidence, reasoning = self._confidence(best, second)
         debug_info["candidate_count"] = len(fused)
         debug_info["candidates"] = [candidate.debug_values() for candidate in fused[:25]]
         debug_info["selected_candidate"] = best.debug_values()
         debug_info["inferred_edge_count"] = best.inferred_edges
         debug_info["best_score"] = round(best.total_score, 4)
+        debug_info["selected_candidate_score"] = round(best.total_score, 4)
         debug_info["second_best_score"] = (
             round(second.total_score, 4) if second is not None else None
         )
+        debug_info["second_candidate_score"] = debug_info["second_best_score"]
+        debug_info["confidence_competitor_id"] = (
+            second.candidate_id if second is not None else None
+        )
+        debug_info["full_card_boundary_score"] = round(
+            best.full_card_boundary_score, 4
+        )
+        debug_info["coverage_score"] = round(best.candidate_coverage_score, 4)
+        debug_info["ratio_score"] = round(best.ratio_score, 4)
+        debug_info["internal_subregion_penalty"] = round(
+            best.internal_subregion_penalty, 4
+        )
+        debug_info["background_penalty"] = round(best.background_penalty, 4)
         debug_info["confidence_reasoning"] = reasoning
         debug_info["ambiguity_penalty"] = reasoning["ambiguity_penalty"]
 
@@ -2095,6 +2126,17 @@ class CardDetector:
             )
         stage_images["candidate_scores"] = Image.fromarray(overlay).copy()
         stage_images["candidate_overlay"] = stage_images["candidate_scores"].copy()
+        selected_overlay, selected_scale = self._debug_overlay_canvas(original)
+        if candidates:
+            selected_points = np.round(
+                candidates[0].polygon * selected_scale
+            ).astype(np.int32)
+            cv2.polylines(
+                selected_overlay, [selected_points], True, (45, 205, 95), 4
+            )
+        stage_images["selected_rough_card_region"] = Image.fromarray(
+            selected_overlay
+        ).copy()
         debug_info["stage_images"] = stage_images
 
     @staticmethod

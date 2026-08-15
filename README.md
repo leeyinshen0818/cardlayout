@@ -72,6 +72,22 @@ python -m pytest
 
 Tests cover JPG/PNG normalization, one/two/multi-page PDFs, invalid input, A4/card geometry, PDF/JPG export, consistent placement, detection scoring and geometry, rotated cards, clutter, ambiguous candidates, nested rectangles, white/light/dark support surfaces, low-texture and uniform-blue card backs, paired front/back geometry, nearby phones and notebooks, blank-paper rejection, safe failure, perspective ordering and validation, robust line fitting and outlier rejection, local search bands, rounded boundaries, one-edge/one-corner/two-edge hand occlusion, color-only edges, strong internal printed/logo/text/chip rectangles, inward-collapse rejection, refinement fallback and background-hijack rejection, exact preset ratios, independent image-correction state, deterministic preset strength, non-cumulative rendering, correction-aware JPG/PDF export, draggable corner controls, zoom/pan coordinate stability, and UI interactions. Tests do not require manually opening the GUI.
 
+## Standalone Windows build
+
+Install the project dependencies and PyInstaller on the build computer, then run:
+
+```powershell
+python -m pip install -r requirements.txt pyinstaller
+powershell -ExecutionPolicy Bypass -File .\build_windows.ps1
+```
+
+The windowed single-file build is written to `dist\CardLayout.exe`. Copy only
+that EXE to the Desktop (or any folder) on another Windows computer and launch
+it directly; the target computer does not need Python, pip, VS Code, or separate
+dependencies. The build does not include the project's `tests` or `testing`
+directories. A one-file app extracts its bundled runtime to a temporary folder
+while running, then cleans that temporary copy when it closes.
+
 ## Architecture
 
 ```text

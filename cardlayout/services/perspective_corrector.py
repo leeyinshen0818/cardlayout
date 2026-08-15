@@ -49,7 +49,6 @@ class PerspectiveCorrector:
         inferred_corner_count: int = 0,
         method: str = "automatic",
         refine: bool = True,
-        pdf_frame_background: tuple[int, int, int] | None = None,
     ) -> PerspectiveResult:
         """Order, validate, optionally refine, and rectify four source points."""
         source = tuple((float(x), float(y)) for x, y in points)
@@ -145,64 +144,6 @@ class PerspectiveCorrector:
             flags=cv2.INTER_LANCZOS4,
             borderMode=cv2.BORDER_REPLICATE,
         )
-        top_frame = self._residual_top_frame_metrics(
-            rectified, pdf_frame_background
-        )
-        selected_top_edge_offset = 0.0
-        if (
-            perspective_method == "automatic"
-            and pdf_frame_background is not None
-            and top_frame["strip_rows"] >= 2
-        ):
-            adjustment_fraction = min(
-                self.config.maximum_residual_top_adjustment_fraction,
-                max(0.0, top_frame["strip_rows"] / output_height),
-            )
-            adjusted = refined.copy()
-            adjusted[0] += (refined[3] - refined[0]) * adjustment_fraction
-            adjusted[1] += (refined[2] - refined[1]) * adjustment_fraction
-            candidate_valid, _ = self.validate_quad(adjusted, (width, height))
-            if candidate_valid:
-                candidate_width, candidate_height = self._output_size(adjusted)
-                candidate_destination = np.asarray(
-                    (
-                        (0.0, 0.0),
-                        (float(candidate_width - 1), 0.0),
-                        (float(candidate_width - 1), float(candidate_height - 1)),
-                        (0.0, float(candidate_height - 1)),
-                    ),
-                    dtype=np.float32,
-                )
-                candidate_matrix = cv2.getPerspectiveTransform(
-                    adjusted.astype(np.float32), candidate_destination
-                )
-                candidate_rectified = cv2.warpPerspective(
-                    working,
-                    candidate_matrix,
-                    (candidate_width, candidate_height),
-                    flags=cv2.INTER_LANCZOS4,
-                    borderMode=cv2.BORDER_REPLICATE,
-                )
-                candidate_top = self._residual_top_frame_metrics(
-                    candidate_rectified, pdf_frame_background
-                )
-                if (
-                    candidate_top["top_white_ratio"]
-                    <= top_frame["top_white_ratio"] - 0.18
-                ):
-                    selected_top_edge_offset = float(
-                        0.5
-                        * (
-                            np.linalg.norm(adjusted[0] - refined[0])
-                            + np.linalg.norm(adjusted[1] - refined[1])
-                        )
-                    )
-                    refined = adjusted
-                    output_width, output_height = candidate_width, candidate_height
-                    destination = candidate_destination
-                    matrix = candidate_matrix
-                    rectified = candidate_rectified
-                    top_frame = candidate_top
         confidence, confidence_level, status, quality = self._quality(
             refined,
             (width, height),
@@ -243,20 +184,6 @@ class PerspectiveCorrector:
                 edge.name: round(edge.score, 4) for edge in edge_results
             },
             "refinement_fallback_reason": refinement_fallback_reason,
-            "post_rectify_top_white_ratio": round(
-                top_frame["top_white_ratio"], 4
-            ),
-            "post_rectify_top_strip_rows": int(top_frame["strip_rows"]),
-            "selected_top_edge_offset": round(selected_top_edge_offset, 3),
-            "top_candidate_outer_score": round(
-                top_frame["outer_score"], 4
-            ),
-            "top_candidate_inner_score": round(
-                top_frame["inner_score"], 4
-            ),
-            "pdf_frame_edge_penalty": round(
-                top_frame["frame_penalty"], 4
-            ),
             "refinement": {
                 key: value
                 for key, value in refinement_debug.items()
@@ -399,65 +326,6 @@ class PerspectiveCorrector:
         height = max(40, int(round(width / self.target_ratio)))
         width = max(64, int(round(height * self.target_ratio)))
         return width, height
-
-    @staticmethod
-    def _residual_top_frame_metrics(
-        rectified: np.ndarray,
-        background_color: tuple[int, int, int] | None,
-    ) -> dict[str, float]:
-        if background_color is None or rectified.size == 0:
-            return {
-                "strip_rows": 0.0,
-                "top_white_ratio": 0.0,
-                "outer_score": 0.0,
-                "inner_score": 0.0,
-                "frame_penalty": 0.0,
-            }
-        height, width = rectified.shape[:2]
-        scan_rows = max(3, min(int(round(height * 0.04)), 48))
-        top = rectified[:scan_rows]
-        lab = cv2.cvtColor(top, cv2.COLOR_RGB2LAB).astype(np.float32)
-        background_lab = cv2.cvtColor(
-            np.uint8([[background_color]]), cv2.COLOR_RGB2LAB
-        )[0, 0].astype(np.float32)
-        similar = np.linalg.norm(lab - background_lab, axis=2) <= 20.0
-        gray = cv2.cvtColor(top, cv2.COLOR_RGB2GRAY)
-        edges = cv2.Canny(gray, 35, 110) > 0
-        strip_rows = 0
-        for row in range(scan_rows):
-            if (
-                float(np.mean(similar[row])) < 0.88
-                or float(np.var(gray[row])) > 50.0
-                or float(np.mean(edges[row])) > 0.045
-            ):
-                break
-            strip_rows += 1
-        top_white_ratio = float(np.mean(similar[: max(1, min(5, scan_rows))]))
-        inner_start = min(scan_rows - 1, strip_rows + 1)
-        inner = slice(inner_start, scan_rows)
-        inner_score = float(
-            np.clip(
-                0.58 * (1.0 - np.mean(similar[inner]))
-                + 0.42 * min(1.0, np.mean(edges[inner]) / 0.04),
-                0.0,
-                1.0,
-            )
-        )
-        outer_score = float(
-            np.clip(
-                0.65 * top_white_ratio
-                + 0.35 * (1.0 - min(1.0, np.mean(edges[: max(1, strip_rows)]) / 0.04)),
-                0.0,
-                1.0,
-            )
-        )
-        return {
-            "strip_rows": float(strip_rows),
-            "top_white_ratio": top_white_ratio,
-            "outer_score": outer_score,
-            "inner_score": inner_score,
-            "frame_penalty": outer_score * (1.0 - 0.35 * inner_score),
-        }
 
     def _quality(
         self,

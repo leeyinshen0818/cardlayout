@@ -134,6 +134,7 @@ class InputLoader:
         detector_input = normalized.image.copy()
         diagnostics: dict[str, object] = {
             "source_type": source_type,
+            "source_format": path.suffix.lower().lstrip("."),
             "source_path": str(path),
             "source_page": source_page,
             "original_raster_width": raw.width,
@@ -142,9 +143,22 @@ class InputLoader:
             "normalized_height": detector_input.height,
             "white_margin_trim_applied": normalized.trim_applied,
             "trim_box": normalized.trim_box,
+            "pdf_trim_box": normalized.trim_box if source_type == "pdf" else None,
             "initial_trim_box": normalized.initial_trim_box,
             "second_pass_trim_box": normalized.second_pass_trim_box,
             "residual_trim_offsets": normalized.residual_trim_offsets,
+            "pdf_residual_border_flags": {
+                name: bool(offset)
+                for name, offset in zip(
+                    ("top", "right", "bottom", "left"),
+                    normalized.residual_trim_offsets,
+                )
+            } if source_type == "pdf" else {
+                "top": False,
+                "right": False,
+                "bottom": False,
+                "left": False,
+            },
             "outer_background_color": normalized.background_color,
             "outer_background_tolerance": normalized.background_tolerance,
             "outer_background_confidence": round(
@@ -164,7 +178,10 @@ class InputLoader:
             diagnostics.update(normalized.residual_metrics)
         if self.debug:
             stages: dict[str, Image.Image] = {
+                "raw_source_raster": raw.copy(),
+                "normalized_raster": detector_input.copy(),
                 "detector_input": detector_input.copy(),
+                "final_card_detector_input": detector_input.copy(),
             }
             if source_type == "pdf":
                 stages["raw_pdf_render"] = raw.copy()
@@ -188,7 +205,6 @@ class InputLoader:
                         normalized.residual_trim_overlay.copy()
                     )
                 stages["normalized_pdf_raster"] = detector_input.copy()
-                stages["final_card_detector_input"] = detector_input.copy()
             diagnostics["stage_images"] = stages
         return CardSide(
             side=side,

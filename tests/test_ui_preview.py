@@ -61,6 +61,7 @@ def test_exports_save_directly_to_downloads_without_save_dialog(
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
     saved_paths: list[Path] = []
+    opened_folders: list[Path] = []
 
     monkeypatch.setattr(window, "_downloads_directory", lambda: tmp_path)
     monkeypatch.setattr(
@@ -78,6 +79,11 @@ def test_exports_save_directly_to_downloads_without_save_dialog(
         "getSaveFileName",
         lambda *args, **kwargs: pytest.fail("Save As dialog must not open"),
     )
+    monkeypatch.setattr(
+        main_window_module.QDesktopServices,
+        "openUrl",
+        lambda url: opened_folders.append(Path(url.toLocalFile())) or True,
+    )
 
     (tmp_path / "card-layout.jpg").touch()
     window._export_jpg()
@@ -87,6 +93,7 @@ def test_exports_save_directly_to_downloads_without_save_dialog(
         tmp_path / "card-layout (1).jpg",
         tmp_path / "card-layout.pdf",
     ]
+    assert opened_folders == [tmp_path.resolve(), tmp_path.resolve()]
     assert "exported to" in window.statusBar().currentMessage()
     window.close()
 

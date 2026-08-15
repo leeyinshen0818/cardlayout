@@ -69,7 +69,6 @@ class PerspectiveConfig:
     maximum_corner_displacement_fraction: float = 0.10
     maximum_edge_displacement_fraction: float = 0.08
     maximum_center_displacement_fraction: float = 0.055
-    maximum_residual_top_adjustment_fraction: float = 0.035
     maximum_refined_area_expansion: float = 1.18
     minimum_refined_area_fraction: float = 0.72
     minimum_refined_width_fraction: float = 0.78
@@ -111,8 +110,6 @@ class PerspectiveConfig:
             raise ValueError("Maximum edge displacement fraction is invalid")
         if not 0 < self.maximum_center_displacement_fraction < 0.20:
             raise ValueError("Maximum center displacement fraction is invalid")
-        if not 0 < self.maximum_residual_top_adjustment_fraction < 0.10:
-            raise ValueError("Residual top-adjustment limit is invalid")
         if not 1 < self.hijack_area_expansion <= self.maximum_refined_area_expansion < 1.5:
             raise ValueError("Refinement area-expansion limits are invalid")
         if not 0.5 < self.minimum_refined_area_fraction < 1:

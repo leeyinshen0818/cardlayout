@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QStandardPaths, Qt
-from PySide6.QtGui import QDragEnterEvent, QDropEvent
+from PySide6.QtCore import QStandardPaths, Qt, QUrl
+from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -539,14 +539,19 @@ class MainWindow(QMainWindow):
         return candidate
 
     def _run_export(self, kind: str, path: str | Path, exporter: object) -> None:
+        exported = False
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             exporter(path, self.front, self.back)  # type: ignore[operator]
             self.statusBar().showMessage(f"{kind} exported to {path}", 8000)
+            exported = True
         except ExportError as exc:
             self._show_error("Export failed", str(exc))
         finally:
             QApplication.restoreOverrideCursor()
+        if exported:
+            output_folder = Path(path).resolve().parent
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_folder)))
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         paths = [Path(url.toLocalFile()) for url in event.mimeData().urls()]

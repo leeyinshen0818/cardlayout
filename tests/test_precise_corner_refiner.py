@@ -222,11 +222,12 @@ def test_debug_mode_exposes_rough_bands_evidence_fits_and_metrics() -> None:
     image, _, rough = _card_scene()
     result = PreciseCornerRefiner(debug=True).refine(image, rough)
     assert result.success
-    assert set(result.debug_info["stage_images"]) == {
+    assert {
         "rough_and_search_bands",
+        "edge_search_bands",
         "raw_edge_evidence",
         "fitted_edges_and_intersections",
-    }
+    } <= set(result.debug_info["stage_images"])
     assert set(result.debug_info["edge_scores"]) == {"top", "right", "bottom", "left"}
     assert len(result.debug_info["rough_to_refined_corner_distances"]) == 4
     assert {
@@ -243,6 +244,11 @@ def test_debug_mode_exposes_rough_bands_evidence_fits_and_metrics() -> None:
         "refined_center",
         "corner_displacements_px",
         "reconstructed_corner_count",
+        "corner_reconstruction_count",
+        "top_confidence",
+        "right_confidence",
+        "bottom_confidence",
+        "left_confidence",
     } <= result.debug_info.keys()
 
 

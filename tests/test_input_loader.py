@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from cardlayout.services.input_loader import InputLoadError, InputLoader
 
@@ -25,6 +26,40 @@ def test_png_loads_and_flattens_transparency(sample_png: Path) -> None:
     assert side.processed_image.getpixel((0, 0)) == pytest.approx(
         (61, 119, 201), abs=1
     )
+
+
+@pytest.mark.parametrize("mode", ["L", "P"])
+def test_png_grayscale_and_palette_modes_become_canonical_rgb(
+    tmp_path: Path, mode: str
+) -> None:
+    path = tmp_path / f"{mode}.png"
+    if mode == "L":
+        image = Image.new("L", (90, 55), 73)
+    else:
+        image = Image.new("P", (90, 55), 1)
+        palette = [0] * 768
+        palette[3:6] = [20, 90, 190]
+        image.putpalette(palette)
+    image.save(path)
+
+    side = InputLoader().load_side(path, "front").card_side
+
+    assert side.processing_raster.mode == "RGB"
+    assert side.processing_raster.size == (90, 55)
+
+
+def test_jpg_exif_orientation_is_applied_once_before_detection(tmp_path: Path) -> None:
+    path = tmp_path / "oriented.jpg"
+    image = Image.new("RGB", (80, 40), (40, 90, 150))
+    exif = Image.Exif()
+    exif[274] = 6
+    image.save(path, exif=exif)
+
+    side = InputLoader().load_side(path, "front").card_side
+
+    assert side.processing_raster.size == (40, 80)
+    assert side.source_diagnostics["normalized_width"] == 40
+    assert side.source_diagnostics["normalized_height"] == 80
 
 
 def test_one_page_pdf_loads_front_and_leaves_back_empty(one_page_pdf: Path) -> None:
