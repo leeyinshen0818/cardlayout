@@ -1030,7 +1030,7 @@ class CardDetector:
         background_penalty = (
             self.config.plain_rectangle_penalty
             if interior_detail_score < 0.05
-            and area_ratio > 0.04
+            and area_ratio > self.config.oversize_start_ratio
             and rectangularity_score > 0.88
             else 0.0
         )
@@ -1125,6 +1125,9 @@ class CardDetector:
                 continue
             combined_methods = match.source_methods | incoming.source_methods
             combined_scales = match.scales_used | incoming.scales_used
+            combined_line_support = max(
+                match.line_support_score, incoming.line_support_score
+            )
             # Scoring decides which fused candidate wins; it should not also
             # decide which polygon supplies the geometry.  A line-only quad
             # can score slightly higher while quantising an otherwise exact
@@ -1155,6 +1158,15 @@ class CardDetector:
                 match.border_touches = incoming.border_touches
             match.source_methods = combined_methods
             match.scales_used = combined_scales
+            combined_strategies = {
+                method.split(":", 1)[0] for method in combined_methods
+            }
+            if (
+                match.area_ratio <= self.config.oversize_start_ratio
+                and {"contour", "rotated_rect"} & combined_strategies
+                and {"line4", "partial3", "partial2"} & combined_strategies
+            ):
+                match.line_support_score = combined_line_support
             match.contextual_scored = False
 
         for candidate in fused:
@@ -1227,7 +1239,13 @@ class CardDetector:
             candidate.interior_complexity_score = complexity
             candidate.border_contrast_score = border
             candidate.foreground_score = float(
-                np.clip(0.52 * border + 0.36 * complexity + 0.12 * candidate.edge_score, 0.0, 1.0)
+                np.clip(
+                    0.52 * border
+                    + 0.36 * complexity
+                    + 0.12 * candidate.edge_score,
+                    0.0,
+                    1.0,
+                )
             )
             candidate.nested_candidate_score = 0.0
             candidate.oversize_penalty = self._oversize_penalty(candidate.area_ratio)
@@ -1348,22 +1366,45 @@ class CardDetector:
                         np.clip(
                             0.42 * child.border_contrast_score
                             + 0.28 * child.interior_complexity_score
-                            + 0.30 * max(ratio_advantage, complexity_advantage),
+                            + 0.30
+                            * max(ratio_advantage, complexity_advantage),
                             0.0,
                             1.0,
                         )
                     ),
                 )
+                parent_is_plausible_perimeter = (
+                    parent.inferred_edges == 0
+                    and parent.area_ratio <= self.config.oversize_start_ratio
+                    and parent.geometry_score >= 0.72
+                    and parent.ratio_score >= max(0.68, child.ratio_score - 0.16)
+                    and parent.edge_score >= 0.62
+                )
+                if parent_is_plausible_perimeter:
+                    parent.nested_candidate_score = max(
+                        parent.nested_candidate_score,
+                        float(
+                            np.clip(
+                                0.24
+                                + 0.24 * parent.ratio_score
+                                + 0.32 * parent.edge_score
+                                + 0.20 * size_score,
+                                0.0,
+                                1.0,
+                            )
+                        ),
+                    )
                 if (
                     child.inferred_edges == 0
                     and child.area_ratio >= self.config.area_plateau_min_ratio
                     and child_strength >= 0.46
+                    and not parent_is_plausible_perimeter
                     and (
-                        parent.area_ratio >= self.config.nested_parent_min_area_ratio
+                        parent.area_ratio >= self.config.oversize_start_ratio
                         or parent.interior_complexity_score <= 0.55
                     )
                     and (
-                        parent.area_ratio >= self.config.nested_parent_min_area_ratio
+                        parent.area_ratio >= self.config.oversize_start_ratio
                         or ratio_advantage >= 0.08
                         or complexity_advantage >= 0.08
                     )
@@ -1391,8 +1432,11 @@ class CardDetector:
                     direct.inferred_edges == 0
                     and 0.55 <= size_ratio <= 1.80
                     and direct.ratio_score >= 0.60
-                    and direct.interior_complexity_score
-                    >= candidate.interior_complexity_score - 0.12
+                    and direct.edge_score >= candidate.edge_score - 0.12
+                    and (
+                        direct.agreement_score >= 0.20
+                        or direct.line_support_score >= 0.45
+                    )
                 ):
                     candidate.background_penalty += 0.15
                     rejection_sets[inferred_index].add("weaker_inferred_geometry")
@@ -1408,20 +1452,20 @@ class CardDetector:
             if candidate.inferred_edges == 0
             and candidate.area_ratio >= self.config.area_plateau_min_ratio
             and candidate.ratio_score >= 0.60
-            and candidate.interior_complexity_score >= 0.35
             and candidate.edge_score >= 0.65
         ]
         if complete_candidates:
             complete_index, complete = max(
                 complete_candidates,
                 key=lambda item: (
-                    0.32 * item[1].interior_complexity_score
-                    + 0.25 * item[1].ratio_score
-                    + 0.20 * item[1].area_score
-                    + 0.13
+                    0.28 * item[1].ratio_score
+                    + 0.22 * item[1].edge_score
+                    + 0.18 * item[1].geometry_score
+                    + 0.12
                     * min(1.0, max(0, len(item[1].source_methods) - 1) / 3.0)
-                    + 0.10 * item[1].border_contrast_score
-                    + 0.18 * min(1.0, len(contained_by[item[0]]) / 2.0)
+                    + 0.08 * item[1].border_contrast_score
+                    + 0.07 * item[1].area_score
+                    + 0.05 * item[1].interior_complexity_score
                 ),
             )
             for inferred_index, candidate in enumerate(retained):
@@ -1430,8 +1474,8 @@ class CardDetector:
                 size_ratio = complete.area_ratio / max(candidate.area_ratio, 1e-6)
                 if (
                     0.45 <= size_ratio <= 3.0
-                    and complete.interior_complexity_score
-                    >= candidate.interior_complexity_score - 0.20
+                    and complete.geometry_score >= candidate.geometry_score - 0.12
+                    and complete.ratio_score >= candidate.ratio_score - 0.15
                 ):
                     candidate.background_penalty += 0.09
                     rejection_sets[inferred_index].add("complete_candidate_preferred")
@@ -1591,10 +1635,20 @@ class CardDetector:
         self, area_ratio: float, complexity: float
     ) -> float:
         threshold = self.config.uniform_complexity_threshold
-        if complexity >= threshold or area_ratio < 0.06:
+        if complexity >= threshold or area_ratio < self.config.oversize_start_ratio:
             return 0.0
         uniformity = (threshold - complexity) / threshold
-        area_factor = float(np.clip((area_ratio - 0.06) / 0.30, 0.0, 1.0))
+        area_factor = float(
+            np.clip(
+                (area_ratio - self.config.oversize_start_ratio)
+                / (
+                    self.config.oversize_full_ratio
+                    - self.config.oversize_start_ratio
+                ),
+                0.0,
+                1.0,
+            )
+        )
         return self.config.maximum_uniform_penalty * uniformity * area_factor
 
     @staticmethod

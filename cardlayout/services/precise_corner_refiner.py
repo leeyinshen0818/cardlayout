@@ -127,8 +127,8 @@ class PreciseCornerRefiner:
         final_edges: list[EdgeFitResult] = []
         for index, result in enumerate(fitted):
             if index in weak_indices:
-                rough_line = self.line_from_points(
-                    local_rough[index], local_rough[(index + 1) % 4]
+                rough_line = self._infer_edge_line(
+                    index, local_rough, fitted, weak_indices
                 )
                 final_edges.append(
                     EdgeFitResult(
@@ -143,6 +143,7 @@ class PreciseCornerRefiner:
                         residual_px=result.residual_px,
                         orientation_delta_degrees=result.orientation_delta_degrees,
                         rough_offset_px=result.rough_offset_px,
+                        signed_rough_offset_px=result.signed_rough_offset_px,
                         candidate_count=result.candidate_count,
                         inlier_count=result.inlier_count,
                         inferred=True,
@@ -152,6 +153,12 @@ class PreciseCornerRefiner:
             else:
                 final_edges.append(result)
                 active_lines.append(np.asarray(result.line, dtype=np.float64))
+
+        active_lines = self._tune_inferred_edges(
+            active_lines, weak_indices, local_rough, short_side
+        )
+        for index in weak_indices:
+            final_edges[index].line = tuple(float(value) for value in active_lines[index])
 
         excessive_edge = next(
             (
@@ -213,7 +220,9 @@ class PreciseCornerRefiner:
                 )
             intersections.append(point)
         local_refined = np.asarray(intersections, dtype=np.float32)
-        valid, fallback_reason = self._validate_refinement(local_rough, local_refined)
+        valid, fallback_reason = self._validate_refinement(
+            local_rough, local_refined, final_edges
+        )
         attempted_refined = local_refined.copy()
         attempted_refined[:, 0] = attempted_refined[:, 0] / scale + left
         attempted_refined[:, 1] = attempted_refined[:, 1] / scale + top
@@ -356,6 +365,11 @@ class PreciseCornerRefiner:
             offset = abs(float(np.dot(hypothesis[:2], midpoint) + hypothesis[2]))
             if offset > band_width * 1.12:
                 continue
+            signed_offset = -float(
+                np.dot(hypothesis[:2], midpoint) + hypothesis[2]
+            )
+            perimeter_score = float(np.exp(-offset / max(1.0, band_width * 0.42)))
+            inward_penalty = max(0.0, -signed_offset / max(1.0, band_width))
             distances = np.abs(points @ hypothesis[:2] + hypothesis[2])
             inliers = distances <= distance_threshold
             if int(inliers.sum()) < 10:
@@ -364,11 +378,13 @@ class PreciseCornerRefiner:
                 points, weights, inliers, expected_start, expected_end, distances
             )
             objective = (
-                0.38 * metrics["support_ratio"]
-                + 0.24 * metrics["continuity"]
-                + 0.18 * metrics["gradient_score"]
-                + 0.12 * metrics["density"]
-                + 0.08 * float(weights[inliers].sum() / weights.sum())
+                0.36 * metrics["support_ratio"]
+                + 0.22 * metrics["continuity"]
+                + 0.17 * metrics["gradient_score"]
+                + 0.11 * metrics["density"]
+                + 0.07 * float(weights[inliers].sum() / weights.sum())
+                + 0.07 * perimeter_score
+                - 0.04 * inward_penalty
             )
             if objective > best_objective:
                 best_objective = objective
@@ -394,6 +410,7 @@ class PreciseCornerRefiner:
         )
         angle_delta = self.line_angle_delta(line, expected_line)
         offset = abs(float(np.dot(line[:2], midpoint) + line[2]))
+        signed_offset = -float(np.dot(line[:2], midpoint) + line[2])
         residual_score = float(
             np.exp(-metrics["residual"] / max(0.5, distance_threshold))
         )
@@ -401,14 +418,16 @@ class PreciseCornerRefiner:
             np.exp(-angle_delta / max(2.0, self.config.maximum_edge_angle_delta_degrees * 0.55))
         )
         proximity_score = float(np.exp(-offset / max(1.0, band_width * 0.52)))
+        inward_penalty = max(0.0, -signed_offset / max(1.0, band_width))
         score = float(np.clip(
-            0.25 * metrics["support_ratio"]
-            + 0.17 * metrics["continuity"]
-            + 0.15 * metrics["gradient_score"]
-            + 0.14 * residual_score
-            + 0.12 * orientation_score
-            + 0.09 * proximity_score
-            + 0.08 * metrics["density"],
+            0.23 * metrics["support_ratio"]
+            + 0.16 * metrics["continuity"]
+            + 0.14 * metrics["gradient_score"]
+            + 0.13 * residual_score
+            + 0.11 * orientation_score
+            + 0.15 * proximity_score
+            + 0.08 * metrics["density"]
+            - 0.04 * inward_penalty,
             0.0,
             1.0,
         ))
@@ -424,6 +443,7 @@ class PreciseCornerRefiner:
             residual_px=metrics["residual"],
             orientation_delta_degrees=angle_delta,
             rough_offset_px=offset,
+            signed_rough_offset_px=signed_offset,
             candidate_count=len(points),
             inlier_count=int(inliers.sum()),
         ), inliers
@@ -592,8 +612,102 @@ class PreciseCornerRefiner:
             "density": density,
         }
 
-    def _validate_refinement(
+    def _infer_edge_line(
+        self,
+        index: int,
+        rough: np.ndarray,
+        fitted: list[EdgeFitResult],
+        weak_indices: list[int],
+    ) -> np.ndarray:
+        """Conservatively reconstruct an occluded edge from rough geometry.
+
+        The rough edge remains the positional anchor.  A reliable opposite edge
+        may contribute a small orientation correction; this avoids replacing a
+        hidden physical boundary with a complete printed rectangle.
+        """
+        rough_line = self.line_from_points(rough[index], rough[(index + 1) % 4])
+        opposite = (index + 2) % 4
+        if opposite in weak_indices or fitted[opposite].line is None:
+            return rough_line
+        opposite_line = self.align_line(
+            np.asarray(fitted[opposite].line, dtype=np.float64), rough_line
+        )
+        if self.line_angle_delta(rough_line, opposite_line) > (
+            self.config.maximum_edge_angle_delta_degrees * 1.25
+        ):
+            return rough_line
+        normal = rough_line[:2] * 0.82 + opposite_line[:2] * 0.18
+        normal /= max(float(np.linalg.norm(normal)), 1e-9)
+        midpoint = (rough[index] + rough[(index + 1) % 4]) / 2.0
+        return np.asarray((normal[0], normal[1], -np.dot(normal, midpoint)))
+
+    def _tune_inferred_edges(
+        self,
+        lines: list[np.ndarray],
+        weak_indices: list[int],
+        rough: np.ndarray,
+        short_side: float,
+    ) -> list[np.ndarray]:
+        """Use the preset ratio only as a tie-breaker near the rough perimeter."""
+        if not weak_indices or self.target_ratio is None:
+            return lines
+        tuned = [line.copy() for line in lines]
+        for index in weak_indices:
+            baseline = tuned[index].copy()
+            best_line = baseline
+            best_objective = float("inf")
+            for displacement in (-0.008 * short_side, 0.0, 0.008 * short_side):
+                candidate = baseline.copy()
+                candidate[2] -= displacement
+                trial = tuned.copy()
+                trial[index] = candidate
+                quad = self._intersections_for_lines(trial)
+                if quad is None or not cv2.isContourConvex(np.round(quad).astype(np.int32)):
+                    continue
+                area_ratio = abs(float(cv2.contourArea(quad))) / max(
+                    abs(float(cv2.contourArea(rough))), 1.0
+                )
+                ratio_error = abs(log(self._quad_ratio(quad) / self.target_ratio))
+                center_shift = float(np.linalg.norm(quad.mean(axis=0) - rough.mean(axis=0)))
+                objective = (
+                    0.58 * abs(area_ratio - 1.0)
+                    + 0.24 * ratio_error
+                    + 0.18 * center_shift / max(short_side, 1.0)
+                )
+                if objective < best_objective:
+                    best_objective = objective
+                    best_line = candidate
+            tuned[index] = best_line
+        return tuned
+
+    def _intersections_for_lines(
+        self, lines: list[np.ndarray]
+    ) -> np.ndarray | None:
+        points: list[np.ndarray] = []
+        for first, second in ((3, 0), (0, 1), (1, 2), (2, 3)):
+            point = self.intersect_lines(lines[first], lines[second])
+            if point is None:
+                return None
+            points.append(point)
+        return np.asarray(points, dtype=np.float32)
+
+    def _signed_edge_displacements(
         self, rough: np.ndarray, refined: np.ndarray
+    ) -> tuple[float, float, float, float]:
+        values: list[float] = []
+        for index in range(4):
+            rough_line = self.line_from_points(
+                rough[index], rough[(index + 1) % 4]
+            )
+            midpoint = (refined[index] + refined[(index + 1) % 4]) / 2.0
+            values.append(float(np.dot(rough_line[:2], midpoint) + rough_line[2]))
+        return tuple(values)  # type: ignore[return-value]
+
+    def _validate_refinement(
+        self,
+        rough: np.ndarray,
+        refined: np.ndarray,
+        edges: list[EdgeFitResult] | None = None,
     ) -> tuple[bool, str | None]:
         if not np.isfinite(refined).all():
             return False, "Refined line intersections are not finite."
@@ -611,6 +725,39 @@ class PreciseCornerRefiner:
         distances = np.linalg.norm(refined - rough, axis=1)
         if float(distances.max()) > short_side * self.config.maximum_corner_displacement_fraction:
             return False, "Refined corners moved too far from detection geometry."
+        rough_center = rough.mean(axis=0)
+        refined_center = refined.mean(axis=0)
+        center_displacement = float(np.linalg.norm(refined_center - rough_center))
+        if center_displacement > short_side * self.config.maximum_center_displacement_fraction:
+            return False, "Refined card center moved too far from detection geometry."
+        signed_edge_displacements = self._signed_edge_displacements(rough, refined)
+        if max(abs(value) for value in signed_edge_displacements) > (
+            short_side * self.config.maximum_edge_displacement_fraction
+        ):
+            return False, "Refined card edge moved too far from detection geometry."
+        maximum_inward = max(0.0, -min(signed_edge_displacements))
+        strong_outer_evidence = bool(
+            edges
+            and sum(
+                not edge.inferred
+                and edge.score >= self.config.strong_outer_boundary_score
+                and edge.support_ratio >= self.config.strong_outer_boundary_support
+                for edge in edges
+            ) >= 3
+            and all(
+                edge.inferred
+                or edge.score >= self.config.strong_outer_boundary_score
+                for edge in edges
+                if edge.signed_rough_offset_px < 0
+            )
+        )
+        if (
+            area_ratio < self.config.collapse_area_fraction
+            and maximum_inward
+            > short_side * self.config.collapse_inward_displacement_fraction
+            and not strong_outer_evidence
+        ):
+            return False, "quadrilateral_collapse: inward refinement lacks strong outer-boundary evidence."
         edges = [float(np.linalg.norm(refined[(i + 1) % 4] - refined[i])) for i in range(4)]
         if min(edges) < max(6.0, short_side * 0.18):
             return False, "A refined card edge collapsed."
@@ -694,6 +841,7 @@ class PreciseCornerRefiner:
                     residual_px=edge.residual_px / scale,
                     orientation_delta_degrees=edge.orientation_delta_degrees,
                     rough_offset_px=edge.rough_offset_px / scale,
+                    signed_rough_offset_px=edge.signed_rough_offset_px / scale,
                     candidate_count=edge.candidate_count,
                     inlier_count=edge.inlier_count,
                     inferred=edge.inferred,
@@ -710,6 +858,9 @@ class PreciseCornerRefiner:
             "edge_residuals": {
                 edge.name: round(edge.residual_px, 3) for edge in converted_edges
             },
+            "edge_confidences": {
+                edge.name: round(edge.score, 4) for edge in converted_edges
+            },
             "rough_to_refined_corner_distances": tuple(
                 round(float(value), 3) for value in displacements
             ),
@@ -723,6 +874,15 @@ class PreciseCornerRefiner:
             "roi_scale": round(scale, 5),
             "strong_edge_count": strong_count,
             "refined_area_ratio": round(refined_area_ratio, 5),
+            "center_displacement_px": round(
+                float(np.linalg.norm(diagnostic.mean(axis=0) - rough.mean(axis=0))), 3
+            ),
+            "signed_edge_displacements_px": {
+                name: round(value, 3)
+                for name, value in zip(
+                    EDGE_NAMES, self._signed_edge_displacements(rough, diagnostic)
+                )
+            },
             "rough_geometry_ratio": round(rough_ratio, 5),
             "refined_geometry_ratio": round(refined_ratio, 5),
             "target_ratio": (
@@ -757,6 +917,7 @@ class PreciseCornerRefiner:
             rough_corners=self._point_tuple(rough),
             refined_corners=self._point_tuple(refined),
             edge_results=tuple(converted_edges),
+            edge_confidences=tuple(edge.score for edge in converted_edges),
             corner_confidences=corner_confidences,
             confidence=confidence,
             roi_box=roi_box,

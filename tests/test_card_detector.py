@@ -220,3 +220,43 @@ def test_debug_mode_keeps_intermediate_images_in_memory_only(tmp_path: Path) -> 
     }
     assert all(isinstance(image, Image.Image) for image in stages.values())
     assert list(tmp_path.iterdir()) == []
+
+
+def _paired_side_scene(side: str) -> tuple[Image.Image, tuple[int, int, int, int]]:
+    pixels = np.full((720, 1000, 3), (54, 72, 92), dtype=np.uint8)
+    card = np.asarray(((205, 190), (785, 150), (820, 515), (180, 555)), np.int32)
+    cv2.fillConvexPoly(pixels, card, (68, 112, 168))
+    cv2.polylines(pixels, [card], True, (88, 132, 184), 3, cv2.LINE_AA)
+    if side == "front":
+        cv2.rectangle(pixels, (330, 260), (630, 420), (40, 72, 125), 5)
+        cv2.circle(pixels, (700, 315), 55, (145, 175, 205), -1)
+    else:
+        # A nearly uniform back deliberately supplies very little interior detail.
+        cv2.circle(pixels, (295, 250), 20, (80, 125, 180), -1)
+    return Image.fromarray(pixels), (178, 148, 822, 557)
+
+
+def test_low_texture_back_and_detailed_front_use_same_outer_geometry(detector) -> None:
+    front_image, expected = _paired_side_scene("front")
+    back_image, _ = _paired_side_scene("back")
+
+    front = detector.detect(front_image)
+    back = detector.detect(back_image)
+
+    assert front.success and back.success
+    assert front.bounding_box is not None and back.bounding_box is not None
+    for detected in (front.bounding_box, back.bounding_box):
+        assert detected == pytest.approx(expected, abs=8)
+    assert np.max(np.abs(np.subtract(front.bounding_box, back.bounding_box))) <= 8
+    assert back.debug_info["selected_candidate"]["interior_complexity_score"] < 0.10
+
+
+def test_strong_internal_rectangle_does_not_beat_physical_perimeter(detector) -> None:
+    image, expected = _paired_side_scene("front")
+    result = detector.detect(image)
+
+    assert result.success
+    assert result.bounding_box == pytest.approx(expected, abs=8)
+    selected = result.debug_info["selected_candidate"]
+    assert selected["line_support_score"] >= 0.75
+    assert selected["area_ratio"] >= 0.25

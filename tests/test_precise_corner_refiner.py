@@ -4,7 +4,13 @@ import cv2
 import numpy as np
 import pytest
 
-from cardlayout.models.perspective import PerspectiveConfig
+from PIL import Image
+
+from cardlayout.models.card_size import MALAYSIA_IC
+from cardlayout.models.perspective import EdgeFitResult, PerspectiveConfig
+from cardlayout.services.perspective_corrector import PerspectiveCorrector
+
+TARGET_RATIO = MALAYSIA_IC.width_mm / MALAYSIA_IC.height_mm
 from cardlayout.services.precise_corner_refiner import PreciseCornerRefiner
 
 
@@ -207,3 +213,122 @@ def test_debug_mode_exposes_rough_bands_evidence_fits_and_metrics() -> None:
     }
     assert set(result.debug_info["edge_scores"]) == {"top", "right", "bottom", "left"}
     assert len(result.debug_info["rough_to_refined_corner_distances"]) == 4
+
+
+def _weak_blue_back(
+    *,
+    internal_rectangle: bool = False,
+    occlusion: str | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    image = np.full((820, 1200, 3), (43, 75, 108), dtype=np.uint8)
+    true = np.asarray(((200, 165), (1000, 165), (1000, 669), (200, 669)), np.float32)
+    cv2.rectangle(image, (200, 165), (1000, 669), (50, 86, 124), -1)
+    cv2.rectangle(image, (200, 165), (1000, 669), (57, 95, 134), 2, cv2.LINE_AA)
+    if internal_rectangle:
+        cv2.rectangle(image, (230, 195), (970, 639), (220, 230, 240), 7, cv2.LINE_AA)
+    else:
+        cv2.circle(image, (270, 235), 18, (61, 101, 143), -1, cv2.LINE_AA)
+    skin = (184, 132, 106)
+    if occlusion == "edge":
+        cv2.line(image, (450, 160), (690, 168), skin, 66, cv2.LINE_AA)
+    elif occlusion == "corner":
+        cv2.circle(image, (205, 170), 78, skin, -1, cv2.LINE_AA)
+    elif occlusion == "adjacent":
+        cv2.line(image, (195, 185), (205, 390), skin, 62, cv2.LINE_AA)
+        cv2.line(image, (205, 170), (420, 165), skin, 62, cv2.LINE_AA)
+    rough = true + np.asarray(((-5, -4), (5, -4), (5, 5), (-5, 5)), np.float32)
+    return image, true, rough
+
+
+def _quad_area(points: np.ndarray) -> float:
+    return abs(float(cv2.contourArea(np.asarray(points, dtype=np.float32))))
+
+
+def test_low_texture_uniform_blue_back_never_collapses() -> None:
+    image, _, rough = _weak_blue_back()
+    result = PreciseCornerRefiner(target_ratio=TARGET_RATIO).refine(image, rough)
+    refined = np.asarray(result.refined_corners)
+
+    assert _quad_area(refined) / _quad_area(rough) >= 0.90
+    assert np.linalg.norm(refined.mean(axis=0) - rough.mean(axis=0)) < 12
+    assert tuple(edge.name for edge in result.edge_results) == (
+        "top", "right", "bottom", "left"
+    )
+    assert len(result.edge_confidences) == 4
+
+
+@pytest.mark.parametrize("occlusion", ["edge", "corner", "adjacent"])
+def test_partial_hand_occlusion_reduces_confidence_without_inward_collapse(
+    occlusion: str,
+) -> None:
+    image, _, rough = _weak_blue_back(occlusion=occlusion)
+    result = PreciseCornerRefiner(target_ratio=TARGET_RATIO).refine(image, rough)
+    refined = np.asarray(result.refined_corners)
+    clear_image, _, clear_rough = _weak_blue_back()
+    clear = PreciseCornerRefiner(target_ratio=TARGET_RATIO).refine(
+        clear_image, clear_rough
+    )
+
+    assert _quad_area(refined) / _quad_area(rough) >= 0.88
+    assert max(np.linalg.norm(refined - rough, axis=1)) < 55
+    assert result.confidence < clear.confidence
+
+
+def test_strong_internal_printed_rectangle_cannot_replace_weak_outer_boundary() -> None:
+    image, _, rough = _weak_blue_back(internal_rectangle=True)
+    result = PreciseCornerRefiner(target_ratio=TARGET_RATIO).refine(image, rough)
+    refined = np.asarray(result.refined_corners)
+
+    assert _quad_area(refined) / _quad_area(rough) >= 0.90
+    assert np.linalg.norm(refined.mean(axis=0) - rough.mean(axis=0)) < 12
+    if not result.success:
+        assert result.refined_corners == result.rough_corners
+
+
+def test_logo_text_and_chip_edges_do_not_dominate_outer_boundary() -> None:
+    image, true, rough = _weak_blue_back()
+    cv2.rectangle(image, (250, 225), (430, 390), (225, 230, 235), 9)
+    cv2.rectangle(image, (760, 220), (925, 520), (25, 45, 70), 8)
+    for y in range(470, 590, 22):
+        cv2.line(image, (285, y), (700, y), (220, 225, 230), 6)
+    result = PreciseCornerRefiner(target_ratio=TARGET_RATIO).refine(image, rough)
+    refined = np.asarray(result.refined_corners)
+
+    assert _quad_area(refined) / _quad_area(rough) >= 0.90
+    assert np.linalg.norm(refined.mean(axis=0) - true.mean(axis=0)) < 12
+
+
+def test_incorrect_inward_refinement_is_rejected_without_strong_outer_evidence() -> None:
+    refiner = PreciseCornerRefiner(target_ratio=TARGET_RATIO)
+    rough = np.asarray(((100, 100), (900, 100), (900, 604), (100, 604)), np.float32)
+    inward = np.asarray(((132, 132), (868, 132), (868, 572), (132, 572)), np.float32)
+    weak_internal_edges = [
+        EdgeFitResult(
+            name=name,
+            success=True,
+            score=0.57,
+            support_ratio=0.62,
+            signed_rough_offset_px=-32.0,
+        )
+        for name in ("top", "right", "bottom", "left")
+    ]
+
+    valid, reason = refiner._validate_refinement(rough, inward, weak_internal_edges)
+
+    assert not valid
+    assert "collapse" in (reason or "").lower()
+
+
+def test_failed_automatic_refinement_preserves_rough_quad_and_requests_review() -> None:
+    image = np.full((820, 1200, 3), (45, 78, 112), dtype=np.uint8)
+    rough = np.asarray(((200, 165), (1000, 165), (1000, 669), (200, 669)), np.float32)
+    cv2.rectangle(image, (230, 195), (970, 639), (230, 235, 240), 8)
+
+    result = PerspectiveCorrector(MALAYSIA_IC).correct(
+        Image.fromarray(image), rough, detector_confidence=0.82
+    )
+
+    assert result.success
+    assert result.status == "review"
+    assert np.allclose(np.asarray(result.refined_points), rough)
+    assert result.refinement_fallback_reason

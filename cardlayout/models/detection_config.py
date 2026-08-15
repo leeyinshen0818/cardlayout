@@ -8,16 +8,16 @@ class DetectionScoreWeights:
     """Inspectable weights for the normalized candidate score."""
 
     area: float = 0.04
-    geometry: float = 0.11
-    aspect_ratio: float = 0.24
-    edge_support: float = 0.11
+    geometry: float = 0.13
+    aspect_ratio: float = 0.26
+    edge_support: float = 0.14
     rectangularity: float = 0.05
-    line_support: float = 0.09
+    line_support: float = 0.11
     method_agreement: float = 0.08
-    interior_detail: float = 0.04
-    interior_complexity: float = 0.10
+    interior_detail: float = 0.02
+    interior_complexity: float = 0.04
     border_contrast: float = 0.06
-    foreground: float = 0.04
+    foreground: float = 0.03
     nested_candidate: float = 0.04
 
     def __post_init__(self) -> None:

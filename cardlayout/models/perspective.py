@@ -28,6 +28,7 @@ class EdgeFitResult:
     residual_px: float = 0.0
     orientation_delta_degrees: float = 0.0
     rough_offset_px: float = 0.0
+    signed_rough_offset_px: float = 0.0
     candidate_count: int = 0
     inlier_count: int = 0
     inferred: bool = False
@@ -41,6 +42,7 @@ class CornerRefinementResult:
     rough_corners: tuple[Point, ...]
     refined_corners: tuple[Point, ...]
     edge_results: tuple[EdgeFitResult, ...] = ()
+    edge_confidences: tuple[float, ...] = ()
     corner_confidences: tuple[float, ...] = ()
     confidence: float = 0.0
     roi_box: tuple[int, int, int, int] | None = None
@@ -65,8 +67,13 @@ class PerspectiveConfig:
     edge_endpoint_trim_fraction: float = 0.045
     maximum_corner_displacement_fraction: float = 0.10
     maximum_edge_displacement_fraction: float = 0.08
+    maximum_center_displacement_fraction: float = 0.055
     maximum_refined_area_expansion: float = 1.18
     minimum_refined_area_fraction: float = 0.72
+    collapse_area_fraction: float = 0.88
+    collapse_inward_displacement_fraction: float = 0.022
+    strong_outer_boundary_score: float = 0.70
+    strong_outer_boundary_support: float = 0.72
     maximum_ratio_error_increase: float = 0.10
     hijack_area_expansion: float = 1.10
     hijack_ratio_error_increase: float = 0.035
@@ -97,10 +104,20 @@ class PerspectiveConfig:
             raise ValueError("Maximum corner displacement fraction is invalid")
         if not 0 < self.maximum_edge_displacement_fraction < 0.20:
             raise ValueError("Maximum edge displacement fraction is invalid")
+        if not 0 < self.maximum_center_displacement_fraction < 0.20:
+            raise ValueError("Maximum center displacement fraction is invalid")
         if not 1 < self.hijack_area_expansion <= self.maximum_refined_area_expansion < 1.5:
             raise ValueError("Refinement area-expansion limits are invalid")
         if not 0.5 < self.minimum_refined_area_fraction < 1:
             raise ValueError("Refinement area-contraction limit is invalid")
+        if not self.minimum_refined_area_fraction < self.collapse_area_fraction < 1:
+            raise ValueError("Refinement collapse threshold is invalid")
+        if not 0 < self.collapse_inward_displacement_fraction < 0.10:
+            raise ValueError("Refinement inward-displacement threshold is invalid")
+        if not 0 < self.strong_outer_boundary_score <= 1:
+            raise ValueError("Strong outer-boundary score is invalid")
+        if not 0 < self.strong_outer_boundary_support <= 1:
+            raise ValueError("Strong outer-boundary support is invalid")
         if not 0 <= self.hijack_ratio_error_increase <= self.maximum_ratio_error_increase < 0.5:
             raise ValueError("Refinement ratio-preservation limits are invalid")
         if self.ransac_iterations < 16 or self.maximum_edge_candidates < 200:
@@ -127,6 +144,7 @@ class PerspectiveResult:
     output_dimensions: tuple[int, int] | None = None
     transform_matrix: tuple[tuple[float, float, float], ...] = ()
     corner_confidences: tuple[float, ...] = ()
+    edge_confidences: tuple[float, ...] = ()
     refinement_confidence: float = 0.0
     refinement_fallback_reason: str | None = None
     edge_results: tuple[EdgeFitResult, ...] = ()

@@ -84,6 +84,7 @@ class PerspectiveCorrector:
         refinement_fallback_reason: str | None = None
         corner_confidences: tuple[float, ...] = (1.0, 1.0, 1.0, 1.0)
         edge_results = ()
+        edge_confidences: tuple[float, ...] = ()
         refinement_debug: dict[str, object] = {}
         if refine and perspective_method == "automatic":
             refinement = self.corner_refiner.refine(
@@ -101,6 +102,7 @@ class PerspectiveCorrector:
                 0.0,
             )
             edge_results = refinement.edge_results
+            edge_confidences = refinement.edge_confidences
             refinement_debug = refinement.debug_info
             if refinement.success:
                 refined = np.asarray(refinement.refined_corners, dtype=np.float32)
@@ -175,6 +177,9 @@ class PerspectiveCorrector:
             "corner_confidences": tuple(
                 round(value, 4) for value in corner_confidences
             ),
+            "edge_confidences": {
+                edge.name: round(edge.score, 4) for edge in edge_results
+            },
             "refinement_fallback_reason": refinement_fallback_reason,
             "refinement": {
                 key: value
@@ -203,6 +208,7 @@ class PerspectiveCorrector:
             output_dimensions=(output_width, output_height),
             transform_matrix=matrix_tuple,
             corner_confidences=corner_confidences,
+            edge_confidences=edge_confidences,
             refinement_confidence=refinement_confidence,
             refinement_fallback_reason=refinement_fallback_reason,
             edge_results=edge_results,
