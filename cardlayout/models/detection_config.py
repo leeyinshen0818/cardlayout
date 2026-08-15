@@ -7,14 +7,18 @@ from dataclasses import dataclass, field
 class DetectionScoreWeights:
     """Inspectable weights for the normalized candidate score."""
 
-    area: float = 0.06
-    geometry: float = 0.15
-    aspect_ratio: float = 0.23
-    edge_support: float = 0.16
-    rectangularity: float = 0.08
-    line_support: float = 0.14
-    method_agreement: float = 0.10
-    interior_detail: float = 0.08
+    area: float = 0.04
+    geometry: float = 0.11
+    aspect_ratio: float = 0.24
+    edge_support: float = 0.11
+    rectangularity: float = 0.05
+    line_support: float = 0.09
+    method_agreement: float = 0.08
+    interior_detail: float = 0.04
+    interior_complexity: float = 0.10
+    border_contrast: float = 0.06
+    foreground: float = 0.04
+    nested_candidate: float = 0.04
 
     def __post_init__(self) -> None:
         total = sum(
@@ -27,6 +31,10 @@ class DetectionScoreWeights:
                 self.line_support,
                 self.method_agreement,
                 self.interior_detail,
+                self.interior_complexity,
+                self.border_contrast,
+                self.foreground,
+                self.nested_candidate,
             )
         )
         if abs(total - 1.0) > 1e-6:
@@ -46,11 +54,13 @@ class CardDetectionConfig:
     minimum_area_ratio: float = 0.0012
     tiny_area_ratio: float = 0.008
     preferred_area_ratio: float = 0.10
+    area_plateau_min_ratio: float = 0.012
+    area_plateau_max_ratio: float = 0.26
     maximum_area_ratio: float = 0.90
     whole_frame_width_ratio: float = 0.975
     whole_frame_height_ratio: float = 0.975
 
-    ratio_log_tolerance: float = 0.46
+    ratio_log_tolerance: float = 0.40
     contour_min_dimension_px: int = 14
     contour_epsilon_ratio: float = 0.022
     edge_band_fraction: float = 0.005
@@ -66,8 +76,24 @@ class CardDetectionConfig:
 
     one_inferred_edge_penalty: float = 0.10
     two_inferred_edges_penalty: float = 0.18
-    border_touch_penalty: float = 0.035
+    border_touch_penalty: float = 0.060
     plain_rectangle_penalty: float = 0.08
+    contextual_candidate_limit: int = 28
+    contextual_analysis_long_edge: int = 1400
+    oversize_start_ratio: float = 0.34
+    oversize_full_ratio: float = 0.78
+    maximum_oversize_penalty: float = 0.24
+    nested_parent_penalty: float = 0.18
+    nested_parent_min_area_ratio: float = 0.22
+    nested_containment_ratio: float = 0.82
+    nested_minimum_size_multiple: float = 1.85
+    uniform_complexity_threshold: float = 0.25
+    maximum_uniform_penalty: float = 0.15
+    small_area_penalty_end_ratio: float = 0.020
+    maximum_small_area_penalty: float = 0.14
+    appearance_border_band_fraction: float = 0.045
+    one_edge_evidence_recovery: float = 0.05
+    two_edge_evidence_recovery: float = 0.10
     ambiguity_close_gap: float = 0.045
     ambiguity_medium_gap: float = 0.09
     ambiguity_wide_gap: float = 0.15
@@ -90,5 +116,23 @@ class CardDetectionConfig:
             raise ValueError("Detection working scales must be positive and increasing")
         if not 0 < self.minimum_area_ratio < self.maximum_area_ratio < 1:
             raise ValueError("Candidate area limits are invalid")
+        if not (
+            self.minimum_area_ratio
+            < self.area_plateau_min_ratio
+            < self.preferred_area_ratio
+            < self.area_plateau_max_ratio
+            < self.maximum_area_ratio
+        ):
+            raise ValueError("Candidate area prior is invalid")
+        if not 0 < self.oversize_start_ratio < self.oversize_full_ratio < 1:
+            raise ValueError("Oversize penalty ratios are invalid")
+        if not 0 < self.nested_parent_min_area_ratio < self.oversize_full_ratio:
+            raise ValueError("Nested parent area threshold is invalid")
+        if not self.minimum_area_ratio < self.small_area_penalty_end_ratio < self.preferred_area_ratio:
+            raise ValueError("Small-area penalty range is invalid")
+        if self.contextual_candidate_limit < 5 or self.contextual_analysis_long_edge < 400:
+            raise ValueError("Contextual candidate ranking limits are invalid")
+        if not 0 <= self.one_edge_evidence_recovery <= self.two_edge_evidence_recovery <= 0.15:
+            raise ValueError("Partial-edge recovery bonuses are invalid")
         if not 0 < self.medium_confidence < self.high_confidence <= 1:
             raise ValueError("Confidence thresholds are invalid")

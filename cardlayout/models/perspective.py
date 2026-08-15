@@ -63,7 +63,13 @@ class PerspectiveConfig:
     coarse_search_band_fraction: float = 0.065
     fine_search_band_fraction: float = 0.027
     edge_endpoint_trim_fraction: float = 0.045
-    maximum_corner_displacement_fraction: float = 0.08
+    maximum_corner_displacement_fraction: float = 0.10
+    maximum_edge_displacement_fraction: float = 0.08
+    maximum_refined_area_expansion: float = 1.18
+    minimum_refined_area_fraction: float = 0.72
+    maximum_ratio_error_increase: float = 0.10
+    hijack_area_expansion: float = 1.10
+    hijack_ratio_error_increase: float = 0.035
     maximum_edge_angle_delta_degrees: float = 13.0
     minimum_edge_fit_score: float = 0.43
     ransac_iterations: int = 48
@@ -89,6 +95,14 @@ class PerspectiveConfig:
             raise ValueError("Edge endpoint trim fraction is invalid")
         if not 0 < self.maximum_corner_displacement_fraction < 0.25:
             raise ValueError("Maximum corner displacement fraction is invalid")
+        if not 0 < self.maximum_edge_displacement_fraction < 0.20:
+            raise ValueError("Maximum edge displacement fraction is invalid")
+        if not 1 < self.hijack_area_expansion <= self.maximum_refined_area_expansion < 1.5:
+            raise ValueError("Refinement area-expansion limits are invalid")
+        if not 0.5 < self.minimum_refined_area_fraction < 1:
+            raise ValueError("Refinement area-contraction limit is invalid")
+        if not 0 <= self.hijack_ratio_error_increase <= self.maximum_ratio_error_increase < 0.5:
+            raise ValueError("Refinement ratio-preservation limits are invalid")
         if self.ransac_iterations < 16 or self.maximum_edge_candidates < 200:
             raise ValueError("Robust edge-fitting limits are too small")
         if self.refinement_max_roi_long_edge < 512:

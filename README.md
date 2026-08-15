@@ -2,7 +2,7 @@
 
 CardLayout is a local desktop application for placing the front and back of a physical card on an A4 portrait page and exporting a print-ready PDF or JPG. It is a general card layout tool; Malaysia IC is simply the first built-in size preset.
 
-## Current capabilities (Phases 1–3.1)
+## Current capabilities (Phases 1–3.2)
 
 - Load Front and Back from JPG, JPEG, or PNG files.
 - Load Page 1 from separate PDF files, including mixed image/PDF input.
@@ -18,7 +18,9 @@ CardLayout is a local desktop application for placing the front and back of a ph
 - Crop surrounding background and correct ordinary in-plane rotation when confidence is acceptable.
 - Use a staged hybrid detector: fast contours first, higher-resolution color/line analysis when needed, then occlusion-aware reconstruction as a fallback.
 - Generate and fuse contour, rotated-rectangle, Hough-line, three-edge, and two-opposite-edge candidates across working scales.
-- Rank candidates using geometry, preset aspect ratio, edge and parallel-line support, interior structure, area, rectangularity, cross-method agreement, inferred-edge cost, and ambiguity rather than choosing the largest contour.
+- Retain competing candidates for a second-stage comparison and model contains/contained-by/overlap relationships between card, paper, mat, phone, notebook, and other rectangular regions.
+- Rank candidates using a peaked area prior, perspective-aware preset ratio, local edge support, generic interior complexity, border contrast, foreground evidence, method agreement, and nested-object preference rather than choosing the largest contour.
+- Penalize oversized, uniform, border-touching, or nested background surfaces and weak reconstructed geometry without using OCR, identity templates, or content recognition.
 - Fail safely to the original image when detection confidence is low.
 - Automatically rectify reliable detected quadrilaterals into a front-facing landscape card at the active preset's exact aspect ratio.
 - Refine rough detector geometry at high resolution inside a padded local card ROI before rectification.
@@ -60,7 +62,7 @@ Install the development dependencies as shown above, then run:
 python -m pytest
 ```
 
-Tests cover JPG/PNG normalization, one/two/multi-page PDFs, invalid input, A4/card geometry, PDF/JPG export, consistent placement, detection scoring and geometry, rotated cards, clutter, ambiguous candidates, safe failure, perspective ordering and validation, robust line fitting and outlier rejection, local search bands, rounded and partially occluded boundaries, color-only edges, strong internal rectangles, refinement fallback, exact preset ratios, correction state, corrected-stage export, draggable corner controls, zoom/pan coordinate stability, and UI interactions. Tests do not require manually opening the GUI.
+Tests cover JPG/PNG normalization, one/two/multi-page PDFs, invalid input, A4/card geometry, PDF/JPG export, consistent placement, detection scoring and geometry, rotated cards, clutter, ambiguous candidates, nested rectangles, white/light/dark support surfaces, nearby phones and notebooks, blank-paper rejection, safe failure, perspective ordering and validation, robust line fitting and outlier rejection, local search bands, rounded and partially occluded boundaries, color-only edges, strong internal rectangles, refinement fallback and background-hijack rejection, exact preset ratios, correction state, corrected-stage export, draggable corner controls, zoom/pan coordinate stability, and UI interactions. Tests do not require manually opening the GUI.
 
 ## Architecture
 
@@ -76,11 +78,11 @@ tests/          input, detection, perspective, state, layout, export, and UI tes
 
 Detection normally starts at a 1100-pixel long edge. Weak or ambiguous cases retry at up to 1800 pixels with LAB/HSV color edges and line detection, then up to 2400 pixels for partial-edge reconstruction. Geometry is mapped back to the original resolution, and the final rotated crop is made from the full-resolution source. All scales, thresholds, weights, penalties, and confidence cutoffs live in `CardDetectionConfig` rather than being scattered through the detector.
 
-Optional debug mode retains original/working images, edge and threshold maps, Hough segments, candidate polygons, inferred-edge counts, candidate scores, the winner and runner-up, confidence reasoning, scales, and processing time in memory only. Structured debug logging contains numeric detection diagnostics but no image content or personal data.
+Optional debug mode retains original/working images, edge and threshold maps, Hough segments, candidate polygons and hierarchy, inferred-edge counts, component scores and penalties, rejection reasons, the winner and runner-up, confidence reasoning, scales, and processing time in memory only. Candidate overlays show total, ratio, area, oversize, interior-complexity, and nested scores. Structured debug logging contains numeric detection diagnostics but no image content or personal data.
 
 Perspective correction consumes the detector's original-image polygon instead of re-detecting. Corners are normalized to top-left, top-right, bottom-right, and bottom-left; physical edges are refined as described below, validated, and transformed once from the original-resolution image. Medium-confidence detection, inferred geometry, or image-boundary clipping remains usable but is labeled **Review correction**.
 
-Phase 3.1 treats detector corners as rough priors. It pads the detected card by 10%, caps exceptionally large refinement ROIs at a high-resolution 2600-pixel long edge, and searches only narrow bands around each expected boundary. The first pass tolerates rough detector error; the second pass is centered on the initial fit. RANSAC hypotheses must have spatially distributed gradient support, plausible orientation, and proximity to the rough edge. Final corners are the intersections of the four infinite fitted lines. Excessive displacement, invalid geometry, or insufficient evidence falls back to stored rough corners and requests review.
+Phase 3.2 treats detector corners as mandatory spatial context. It pads the detected card by 10% of its short side, caps exceptionally large refinement ROIs at a high-resolution 2600-pixel long edge, and searches only narrow bands around each expected boundary. The first pass tolerates rough detector error; the second pass is centered on the initial fit. RANSAC hypotheses must have spatially distributed gradient support, plausible orientation, proximity to the rough edge, and scale-aware edge/corner displacement. Final corners are the intersections of the four infinite fitted lines. Excessive movement or area expansion, degraded preset ratio, invalid geometry, or insufficient evidence rejects the refinement as appropriate and falls back to stored rough corners for review.
 
 Perspective debug mode additionally exposes rough geometry, search bands, raw edge evidence, inliers and rejected outliers, fitted physical lines, final intersections, per-edge scores/support/residuals, per-corner confidence, rough-to-refined displacement, refinement confidence, and fallback reason. Images remain in memory unless a developer explicitly saves them.
 

@@ -50,12 +50,27 @@ class _Candidate:
     line_support_score: float
     agreement_score: float
     interior_detail_score: float
+    interior_complexity_score: float
+    border_contrast_score: float
+    foreground_score: float
+    nested_candidate_score: float
     background_penalty: float
+    oversize_penalty: float
+    uniform_surface_penalty: float
+    small_area_penalty: float
+    ratio_penalty: float
+    partial_evidence_bonus: float
     occlusion_penalty: float
     inferred_edges: int
     area_ratio: float
     observed_ratio: float
     border_touches: int
+    candidate_id: str = ""
+    contains_candidates: tuple[str, ...] = ()
+    contained_by_candidates: tuple[str, ...] = ()
+    overlap_candidates: tuple[str, ...] = ()
+    rejection_reasons: tuple[str, ...] = ()
+    contextual_scored: bool = False
 
     @property
     def bounding_box(self) -> tuple[int, int, int, int]:
@@ -83,13 +98,28 @@ class _Candidate:
             "line_support_score": round(self.line_support_score, 4),
             "agreement_score": round(self.agreement_score, 4),
             "interior_detail_score": round(self.interior_detail_score, 4),
+            "interior_complexity_score": round(self.interior_complexity_score, 4),
+            "border_contrast_score": round(self.border_contrast_score, 4),
+            "foreground_score": round(self.foreground_score, 4),
+            "nested_candidate_score": round(self.nested_candidate_score, 4),
             "background_penalty": round(self.background_penalty, 4),
+            "oversize_penalty": round(self.oversize_penalty, 4),
+            "uniform_surface_penalty": round(self.uniform_surface_penalty, 4),
+            "small_area_penalty": round(self.small_area_penalty, 4),
+            "ratio_penalty": round(self.ratio_penalty, 4),
+            "partial_evidence_bonus": round(self.partial_evidence_bonus, 4),
             "occlusion_penalty": round(self.occlusion_penalty, 4),
             "inferred_edges": self.inferred_edges,
             "area_ratio": round(self.area_ratio, 5),
             "observed_ratio": round(self.observed_ratio, 4),
             "border_touches": self.border_touches,
             "bounding_box": self.bounding_box,
+            "candidate_id": self.candidate_id,
+            "contains_candidates": list(self.contains_candidates),
+            "contained_by_candidates": list(self.contained_by_candidates),
+            "overlap_candidates": list(self.overlap_candidates),
+            "rejection_reasons": list(self.rejection_reasons),
+            "contextual_scored": self.contextual_scored,
         }
         # Phase 2 compatibility: geometry_score supersedes shape_score.
         values["shape_score"] = values["geometry_score"]
@@ -158,7 +188,7 @@ class CardDetector:
         )
         pass_results.append(fast)
         all_candidates.extend(fast.candidates)
-        fused = self._fuse_candidates(all_candidates)
+        fused = self._contextual_rank(self._fuse_candidates(all_candidates), original)
 
         if self._looks_already_cropped(fast, fused):
             result = CardDetectionResult(
@@ -191,7 +221,7 @@ class CardDetector:
             )
             pass_results.append(detailed)
             all_candidates.extend(detailed.candidates)
-            fused = self._fuse_candidates(all_candidates)
+            fused = self._contextual_rank(self._fuse_candidates(all_candidates), original)
 
         if self._needs_reconstruction(fused):
             reconstruction = self._run_pass(
@@ -204,7 +234,7 @@ class CardDetector:
             )
             pass_results.append(reconstruction)
             all_candidates.extend(reconstruction.candidates)
-            fused = self._fuse_candidates(all_candidates)
+            fused = self._contextual_rank(self._fuse_candidates(all_candidates), original)
 
         self._attach_pass_debug(debug_info, pass_results, fused, original)
         if not fused:
@@ -975,9 +1005,7 @@ class CardDetector:
         rect_width, rect_height = rotated[1]
         if min(rect_width, rect_height) < self.config.contour_min_dimension_px:
             return None
-        observed_ratio = max(rect_width, rect_height) / max(
-            1.0, min(rect_width, rect_height)
-        )
+        observed_ratio = self._perspective_tolerant_ratio(polygon)
         x, y, box_width, box_height = cv2.boundingRect(polygon.astype(np.int32))
         if (
             box_width >= width * self.config.whole_frame_width_ratio
@@ -992,12 +1020,7 @@ class CardDetector:
                 y + box_height >= height - 2,
             )
         )
-        area_score = min(
-            1.0,
-            (area_ratio / self.config.preferred_area_ratio) ** 0.36,
-        )
-        if area_ratio > 0.72:
-            area_score *= max(0.12, (self.config.maximum_area_ratio - area_ratio) / 0.18)
+        area_score = self._peaked_area_score(area_ratio)
         ratio_score = exp(
             -abs(log(observed_ratio / self._target_ratio))
             / self.config.ratio_log_tolerance
@@ -1036,7 +1059,16 @@ class CardDetector:
             line_support_score=float(np.clip(line_support_score, 0.0, 1.0)),
             agreement_score=0.0,
             interior_detail_score=interior_detail_score,
+            interior_complexity_score=0.0,
+            border_contrast_score=0.0,
+            foreground_score=0.0,
+            nested_candidate_score=0.0,
             background_penalty=background_penalty,
+            oversize_penalty=0.0,
+            uniform_surface_penalty=0.0,
+            small_area_penalty=0.0,
+            ratio_penalty=0.0,
+            partial_evidence_bonus=0.0,
             occlusion_penalty=occlusion_penalty,
             inferred_edges=inferred_edges,
             area_ratio=area_ratio,
@@ -1058,8 +1090,17 @@ class CardDetector:
                 + candidate.line_support_score * weights.line_support
                 + candidate.agreement_score * weights.method_agreement
                 + candidate.interior_detail_score * weights.interior_detail
+                + candidate.interior_complexity_score * weights.interior_complexity
+                + candidate.border_contrast_score * weights.border_contrast
+                + candidate.foreground_score * weights.foreground
+                + candidate.nested_candidate_score * weights.nested_candidate
                 - candidate.occlusion_penalty
                 - candidate.background_penalty
+                - candidate.oversize_penalty
+                - candidate.uniform_surface_penalty
+                - candidate.small_area_penalty
+                - candidate.ratio_penalty
+                + candidate.partial_evidence_bonus
                 - candidate.border_touches * self.config.border_touch_penalty,
                 0.0,
                 1.0,
@@ -1084,7 +1125,11 @@ class CardDetector:
                 continue
             combined_methods = match.source_methods | incoming.source_methods
             combined_scales = match.scales_used | incoming.scales_used
-            if incoming.total_score > match.total_score:
+            # Scoring decides which fused candidate wins; it should not also
+            # decide which polygon supplies the geometry.  A line-only quad
+            # can score slightly higher while quantising an otherwise exact
+            # contour angle, which made rotation jump in 2.5-degree steps.
+            if self._candidate_anchor_quality(incoming) > self._candidate_anchor_quality(match):
                 match.polygon = incoming.polygon.copy()
                 match.geometry_score = incoming.geometry_score
                 match.ratio_score = incoming.ratio_score
@@ -1093,7 +1138,16 @@ class CardDetector:
                 match.rectangularity_score = incoming.rectangularity_score
                 match.line_support_score = incoming.line_support_score
                 match.interior_detail_score = incoming.interior_detail_score
+                match.interior_complexity_score = incoming.interior_complexity_score
+                match.border_contrast_score = incoming.border_contrast_score
+                match.foreground_score = incoming.foreground_score
+                match.nested_candidate_score = incoming.nested_candidate_score
                 match.background_penalty = incoming.background_penalty
+                match.oversize_penalty = incoming.oversize_penalty
+                match.uniform_surface_penalty = incoming.uniform_surface_penalty
+                match.small_area_penalty = incoming.small_area_penalty
+                match.ratio_penalty = incoming.ratio_penalty
+                match.partial_evidence_bonus = incoming.partial_evidence_bonus
                 match.inferred_edges = incoming.inferred_edges
                 match.occlusion_penalty = incoming.occlusion_penalty
                 match.area_ratio = incoming.area_ratio
@@ -1101,6 +1155,7 @@ class CardDetector:
                 match.border_touches = incoming.border_touches
             match.source_methods = combined_methods
             match.scales_used = combined_scales
+            match.contextual_scored = False
 
         for candidate in fused:
             strategies = candidate.strategy_groups
@@ -1114,9 +1169,473 @@ class CardDetector:
                 agreement += 0.20
             if len(candidate.scales_used) >= 3:
                 agreement += 0.10
+            # Repeated extraction from independent threshold/edge views is
+            # useful evidence even when every observation has the same broad
+            # strategy label (for example several rotated-rect masks).
+            agreement += min(0.20, max(0, len(candidate.source_methods) - 1) * 0.04)
             candidate.agreement_score = min(1.0, agreement)
             self._score_candidate(candidate)
         return sorted(fused, key=lambda candidate: candidate.total_score, reverse=True)
+
+    @staticmethod
+    def _candidate_anchor_quality(candidate: _Candidate) -> float:
+        """Prefer directly observed contours when choosing fused geometry."""
+        strategies = candidate.strategy_groups
+        source_bonus = 0.0
+        if "contour" in strategies:
+            source_bonus = 0.10
+        elif "rotated_rect" in strategies:
+            source_bonus = 0.06
+        elif "line4" in strategies:
+            source_bonus = 0.02
+        elif "partial3" in strategies:
+            source_bonus = -0.04
+        elif "partial2" in strategies:
+            source_bonus = -0.08
+        return float(
+            0.30 * candidate.geometry_score
+            + 0.28 * candidate.ratio_score
+            + 0.24 * candidate.edge_score
+            + 0.18 * candidate.rectangularity_score
+            + source_bonus
+        )
+
+    def _contextual_rank(
+        self, candidates: list[_Candidate], original_rgb: np.ndarray
+    ) -> list[_Candidate]:
+        """Run appearance and hierarchy scoring on retained Stage-A candidates."""
+        retained = [
+            self._copy_candidate(candidate)
+            for candidate in candidates[: self.config.contextual_candidate_limit]
+        ]
+        if not retained:
+            return []
+        analysis, scale_x, scale_y = self._contextual_analysis_copy(original_rgb)
+        gray = cv2.cvtColor(analysis, cv2.COLOR_RGB2GRAY)
+        lab = cv2.cvtColor(analysis, cv2.COLOR_RGB2LAB)
+        edges = self._auto_canny(cv2.GaussianBlur(gray, (3, 3), 0.7))
+        analysis_polygons: list[np.ndarray] = []
+        rejection_sets: list[set[str]] = []
+        for candidate in retained:
+            polygon = candidate.polygon.copy().astype(np.float32)
+            polygon[:, 0] *= scale_x
+            polygon[:, 1] *= scale_y
+            analysis_polygons.append(cv2.convexHull(polygon).reshape(-1, 2))
+            complexity, border = self._appearance_metrics(
+                gray, lab, edges, analysis_polygons[-1]
+            )
+            candidate.interior_complexity_score = complexity
+            candidate.border_contrast_score = border
+            candidate.foreground_score = float(
+                np.clip(0.52 * border + 0.36 * complexity + 0.12 * candidate.edge_score, 0.0, 1.0)
+            )
+            candidate.nested_candidate_score = 0.0
+            candidate.oversize_penalty = self._oversize_penalty(candidate.area_ratio)
+            candidate.uniform_surface_penalty = self._uniform_surface_penalty(
+                candidate.area_ratio, complexity
+            )
+            small_progress = np.clip(
+                (self.config.small_area_penalty_end_ratio - candidate.area_ratio)
+                / (
+                    self.config.small_area_penalty_end_ratio
+                    - self.config.minimum_area_ratio
+                ),
+                0.0,
+                1.0,
+            )
+            candidate.small_area_penalty = float(
+                self.config.maximum_small_area_penalty
+                * float(small_progress) ** 2
+                * (3.0 - 2.0 * float(small_progress))
+            )
+            candidate.ratio_penalty = max(
+                0.0, (0.38 - candidate.ratio_score) / 0.38
+            ) * 0.09
+            recovery_limit = 0.0
+            if candidate.inferred_edges == 1:
+                recovery_limit = self.config.one_edge_evidence_recovery
+            elif candidate.inferred_edges >= 2:
+                recovery_limit = self.config.two_edge_evidence_recovery
+            candidate.partial_evidence_bonus = float(
+                recovery_limit
+                * min(1.0, candidate.line_support_score / 0.50)
+                * candidate.ratio_score
+                * candidate.edge_score
+            )
+            candidate.contextual_scored = True
+            reasons: set[str] = set()
+            if candidate.inferred_edges == 1 and border < 0.32:
+                candidate.background_penalty += min(0.08, (0.32 - border) * 0.55)
+                reasons.add("weak_local_boundary")
+            if candidate.oversize_penalty > 0.035:
+                reasons.add("oversized_background")
+            if candidate.uniform_surface_penalty > 0.035:
+                reasons.add("uniform_interior")
+            if candidate.ratio_score < 0.35:
+                reasons.add("poor_card_ratio")
+            rejection_sets.append(reasons)
+
+        contains: list[set[int]] = [set() for _ in retained]
+        contained_by: list[set[int]] = [set() for _ in retained]
+        overlaps: list[set[int]] = [set() for _ in retained]
+        polygon_areas = [
+            max(1.0, abs(float(cv2.contourArea(polygon))))
+            for polygon in analysis_polygons
+        ]
+        for first_index, second_index in combinations(range(len(retained)), 2):
+            intersection = self._convex_intersection_area(
+                analysis_polygons[first_index], analysis_polygons[second_index]
+            )
+            if intersection <= 0:
+                continue
+            first_area = polygon_areas[first_index]
+            second_area = polygon_areas[second_index]
+            if first_area >= second_area:
+                parent_index, child_index = first_index, second_index
+                parent_area, child_area = first_area, second_area
+            else:
+                parent_index, child_index = second_index, first_index
+                parent_area, child_area = second_area, first_area
+            containment = intersection / child_area
+            size_multiple = parent_area / child_area
+            if (
+                containment >= self.config.nested_containment_ratio
+                and size_multiple >= self.config.nested_minimum_size_multiple
+            ):
+                contains[parent_index].add(child_index)
+                contained_by[child_index].add(parent_index)
+            elif intersection / min(first_area, second_area) >= 0.20:
+                overlaps[first_index].add(second_index)
+                overlaps[second_index].add(first_index)
+
+        for parent_index, child_indices in enumerate(contains):
+            parent = retained[parent_index]
+            for child_index in child_indices:
+                child = retained[child_index]
+                size_multiple = polygon_areas[parent_index] / polygon_areas[child_index]
+                size_score = float(np.clip(log(size_multiple) / log(10.0), 0.0, 1.0))
+                ratio_advantage = max(0.0, child.ratio_score - parent.ratio_score)
+                complexity_advantage = max(
+                    0.0,
+                    child.interior_complexity_score
+                    - parent.interior_complexity_score,
+                )
+                child_strength = float(
+                    np.clip(
+                        0.52 * child.ratio_score
+                        + 0.30 * child.interior_complexity_score
+                        + 0.18 * child.border_contrast_score,
+                        0.0,
+                        1.0,
+                    )
+                )
+                child.nested_candidate_score = max(
+                    child.nested_candidate_score,
+                    float(
+                        np.clip(
+                            0.32
+                            + 0.24 * size_score
+                            + 0.24 * ratio_advantage
+                            + 0.20 * complexity_advantage,
+                            0.0,
+                            1.0,
+                        )
+                    ),
+                )
+                child.foreground_score = max(
+                    child.foreground_score,
+                    float(
+                        np.clip(
+                            0.42 * child.border_contrast_score
+                            + 0.28 * child.interior_complexity_score
+                            + 0.30 * max(ratio_advantage, complexity_advantage),
+                            0.0,
+                            1.0,
+                        )
+                    ),
+                )
+                if (
+                    child.inferred_edges == 0
+                    and child.area_ratio >= self.config.area_plateau_min_ratio
+                    and child_strength >= 0.46
+                    and (
+                        parent.area_ratio >= self.config.nested_parent_min_area_ratio
+                        or parent.interior_complexity_score <= 0.55
+                    )
+                    and (
+                        parent.area_ratio >= self.config.nested_parent_min_area_ratio
+                        or ratio_advantage >= 0.08
+                        or complexity_advantage >= 0.08
+                    )
+                ):
+                    parent.oversize_penalty = min(
+                        0.36,
+                        parent.oversize_penalty
+                        + self.config.nested_parent_penalty
+                        * child_strength
+                        * (0.62 + 0.38 * size_score),
+                    )
+                    rejection_sets[parent_index].add("nested_parent_penalty")
+
+        # A reconstructed quad can accidentally combine a card edge with a
+        # nearby mat/page edge.  If a complete overlapping candidate has a
+        # comparable footprint and equally rich local appearance, ownership
+        # belongs to that directly observed boundary.
+        for inferred_index, candidate in enumerate(retained):
+            if candidate.inferred_edges == 0:
+                continue
+            for direct_index in overlaps[inferred_index]:
+                direct = retained[direct_index]
+                size_ratio = direct.area_ratio / max(candidate.area_ratio, 1e-6)
+                if (
+                    direct.inferred_edges == 0
+                    and 0.55 <= size_ratio <= 1.80
+                    and direct.ratio_score >= 0.60
+                    and direct.interior_complexity_score
+                    >= candidate.interior_complexity_score - 0.12
+                ):
+                    candidate.background_penalty += 0.15
+                    rejection_sets[inferred_index].add("weaker_inferred_geometry")
+                    direct.foreground_score = max(direct.foreground_score, 0.72)
+                    direct.nested_candidate_score = max(
+                        direct.nested_candidate_score, 0.70
+                    )
+                    break
+
+        complete_candidates = [
+            (index, candidate)
+            for index, candidate in enumerate(retained)
+            if candidate.inferred_edges == 0
+            and candidate.area_ratio >= self.config.area_plateau_min_ratio
+            and candidate.ratio_score >= 0.60
+            and candidate.interior_complexity_score >= 0.35
+            and candidate.edge_score >= 0.65
+        ]
+        if complete_candidates:
+            complete_index, complete = max(
+                complete_candidates,
+                key=lambda item: (
+                    0.32 * item[1].interior_complexity_score
+                    + 0.25 * item[1].ratio_score
+                    + 0.20 * item[1].area_score
+                    + 0.13
+                    * min(1.0, max(0, len(item[1].source_methods) - 1) / 3.0)
+                    + 0.10 * item[1].border_contrast_score
+                    + 0.18 * min(1.0, len(contained_by[item[0]]) / 2.0)
+                ),
+            )
+            for inferred_index, candidate in enumerate(retained):
+                if candidate.inferred_edges == 0:
+                    continue
+                size_ratio = complete.area_ratio / max(candidate.area_ratio, 1e-6)
+                if (
+                    0.45 <= size_ratio <= 3.0
+                    and complete.interior_complexity_score
+                    >= candidate.interior_complexity_score - 0.20
+                ):
+                    candidate.background_penalty += 0.09
+                    rejection_sets[inferred_index].add("complete_candidate_preferred")
+                    complete.foreground_score = max(complete.foreground_score, 0.85)
+                    complete.nested_candidate_score = max(
+                        complete.nested_candidate_score, 0.90
+                    )
+
+        for candidate in retained:
+            self._score_candidate(candidate)
+        ranked = sorted(retained, key=lambda candidate: candidate.total_score, reverse=True)
+        final_ids = {id(candidate): f"C{index}" for index, candidate in enumerate(ranked, 1)}
+        original_index = {id(candidate): index for index, candidate in enumerate(retained)}
+        for candidate in ranked:
+            index = original_index[id(candidate)]
+            candidate.candidate_id = final_ids[id(candidate)]
+            candidate.contains_candidates = tuple(
+                final_ids[id(retained[other])] for other in sorted(contains[index])
+            )
+            candidate.contained_by_candidates = tuple(
+                final_ids[id(retained[other])] for other in sorted(contained_by[index])
+            )
+            candidate.overlap_candidates = tuple(
+                final_ids[id(retained[other])] for other in sorted(overlaps[index])
+            )
+            candidate.rejection_reasons = tuple(sorted(rejection_sets[index]))
+        return ranked
+
+    def _appearance_metrics(
+        self,
+        gray: np.ndarray,
+        lab: np.ndarray,
+        edges: np.ndarray,
+        polygon: np.ndarray,
+    ) -> tuple[float, float]:
+        height, width = gray.shape
+        center = np.mean(polygon, axis=0)
+        band = self.config.appearance_border_band_fraction
+        inner_polygon = center + (polygon - center) * (1.0 - band)
+        detail_polygon = center + (polygon - center) * 0.78
+        outer_polygon = center + (polygon - center) * (1.0 + band)
+        minimum = np.floor(outer_polygon.min(axis=0) - 2).astype(int)
+        maximum = np.ceil(outer_polygon.max(axis=0) + 2).astype(int)
+        left = max(0, minimum[0])
+        top = max(0, minimum[1])
+        right = min(width, maximum[0] + 1)
+        bottom = min(height, maximum[1] + 1)
+        if right - left < 8 or bottom - top < 8:
+            return 0.0, 0.0
+        local_polygon = polygon - (left, top)
+        local_inner = inner_polygon - (left, top)
+        local_detail = detail_polygon - (left, top)
+        local_outer = outer_polygon - (left, top)
+        shape = (bottom - top, right - left)
+        card_mask = np.zeros(shape, dtype=np.uint8)
+        inner_mask = np.zeros(shape, dtype=np.uint8)
+        detail_mask = np.zeros(shape, dtype=np.uint8)
+        outer_mask = np.zeros(shape, dtype=np.uint8)
+        cv2.fillConvexPoly(card_mask, np.round(local_polygon).astype(np.int32), 255)
+        cv2.fillConvexPoly(inner_mask, np.round(local_inner).astype(np.int32), 255)
+        cv2.fillConvexPoly(detail_mask, np.round(local_detail).astype(np.int32), 255)
+        cv2.fillConvexPoly(outer_mask, np.round(local_outer).astype(np.int32), 255)
+        local_gray = gray[top:bottom, left:right]
+        local_lab = lab[top:bottom, left:right]
+        local_edges = edges[top:bottom, left:right]
+        detail_pixels = detail_mask > 0
+        if int(detail_pixels.sum()) < 30:
+            return 0.0, 0.0
+        edge_density = float(np.count_nonzero(local_edges[detail_pixels])) / float(
+            detail_pixels.sum()
+        )
+        gray_values = local_gray[detail_pixels]
+        lab_values = local_lab[detail_pixels]
+        gray_variation = float(np.clip(np.std(gray_values) / 48.0, 0.0, 1.0))
+        color_variation = float(
+            np.clip(
+                (np.std(lab_values[:, 1]) + np.std(lab_values[:, 2])) / 42.0,
+                0.0,
+                1.0,
+            )
+        )
+        histogram = np.histogram(gray_values, bins=32, range=(0, 256))[0].astype(float)
+        probabilities = histogram[histogram > 0] / max(1.0, histogram.sum())
+        entropy = float(-np.sum(probabilities * np.log2(probabilities)))
+        entropy_score = float(np.clip(entropy / 4.5, 0.0, 1.0))
+        edge_density_score = float(np.clip((edge_density - 0.0015) / 0.045, 0.0, 1.0))
+        complexity = float(
+            np.clip(
+                0.34 * edge_density_score
+                + 0.22 * gray_variation
+                + 0.20 * color_variation
+                + 0.24 * entropy_score,
+                0.0,
+                1.0,
+            )
+        )
+
+        inside_band = (card_mask > 0) & (inner_mask == 0)
+        outside_band = (outer_mask > 0) & (card_mask == 0)
+        if int(inside_band.sum()) < 12 or int(outside_band.sum()) < 12:
+            return complexity, 0.0
+        inside_mean = np.mean(local_lab[inside_band].astype(np.float32), axis=0)
+        outside_mean = np.mean(local_lab[outside_band].astype(np.float32), axis=0)
+        color_transition = float(
+            np.clip(np.linalg.norm(inside_mean - outside_mean) / 72.0, 0.0, 1.0)
+        )
+        boundary_mask = inside_band | outside_band
+        boundary_density = float(np.count_nonzero(local_edges[boundary_mask])) / float(
+            boundary_mask.sum()
+        )
+        border_contrast = float(
+            np.clip(
+                0.58 * color_transition
+                + 0.42 * np.clip(boundary_density / 0.13, 0.0, 1.0),
+                0.0,
+                1.0,
+            )
+        )
+        return complexity, border_contrast
+
+    def _peaked_area_score(self, area_ratio: float) -> float:
+        if area_ratio < self.config.area_plateau_min_ratio:
+            return float(
+                np.clip(
+                    0.18
+                    + 0.62
+                    * np.sqrt(area_ratio / self.config.area_plateau_min_ratio),
+                    0.0,
+                    0.80,
+                )
+            )
+        if area_ratio <= self.config.area_plateau_max_ratio:
+            distance = abs(log(area_ratio / self.config.preferred_area_ratio))
+            return float(np.clip(0.80 + 0.20 * exp(-(distance**2) / 1.8), 0.0, 1.0))
+        span = max(
+            0.01,
+            self.config.maximum_area_ratio - self.config.area_plateau_max_ratio,
+        )
+        decline = (area_ratio - self.config.area_plateau_max_ratio) / span
+        return float(np.clip(0.80 * exp(-2.3 * decline), 0.08, 0.80))
+
+    def _oversize_penalty(self, area_ratio: float) -> float:
+        if area_ratio <= self.config.oversize_start_ratio:
+            return 0.0
+        progress = float(
+            np.clip(
+                (area_ratio - self.config.oversize_start_ratio)
+                / (self.config.oversize_full_ratio - self.config.oversize_start_ratio),
+                0.0,
+                1.0,
+            )
+        )
+        smooth = progress * progress * (3.0 - 2.0 * progress)
+        return self.config.maximum_oversize_penalty * smooth
+
+    def _uniform_surface_penalty(
+        self, area_ratio: float, complexity: float
+    ) -> float:
+        threshold = self.config.uniform_complexity_threshold
+        if complexity >= threshold or area_ratio < 0.06:
+            return 0.0
+        uniformity = (threshold - complexity) / threshold
+        area_factor = float(np.clip((area_ratio - 0.06) / 0.30, 0.0, 1.0))
+        return self.config.maximum_uniform_penalty * uniformity * area_factor
+
+    @staticmethod
+    def _perspective_tolerant_ratio(polygon: np.ndarray) -> float:
+        points = np.asarray(polygon, dtype=np.float32).reshape(4, 2)
+        lengths = np.asarray(
+            [
+                np.linalg.norm(points[(index + 1) % 4] - points[index])
+                for index in range(4)
+            ],
+            dtype=np.float64,
+        )
+        first_pair = (lengths[0] + lengths[2]) / 2.0
+        second_pair = (lengths[1] + lengths[3]) / 2.0
+        return float(max(first_pair, second_pair) / max(1.0, min(first_pair, second_pair)))
+
+    def _contextual_analysis_copy(
+        self, original: np.ndarray
+    ) -> tuple[np.ndarray, float, float]:
+        height, width = original.shape[:2]
+        largest = max(width, height)
+        if largest <= self.config.contextual_analysis_long_edge:
+            return original, 1.0, 1.0
+        factor = self.config.contextual_analysis_long_edge / largest
+        resized = cv2.resize(
+            original,
+            (max(1, int(round(width * factor))), max(1, int(round(height * factor)))),
+            interpolation=cv2.INTER_AREA,
+        )
+        return resized, resized.shape[1] / width, resized.shape[0] / height
+
+    @staticmethod
+    def _convex_intersection_area(first: np.ndarray, second: np.ndarray) -> float:
+        try:
+            area, _ = cv2.intersectConvexConvex(
+                cv2.convexHull(first.astype(np.float32)),
+                cv2.convexHull(second.astype(np.float32)),
+            )
+            return float(max(0.0, area))
+        except cv2.error:
+            return 0.0
 
     @staticmethod
     def _copy_candidate(candidate: _Candidate) -> _Candidate:
@@ -1133,12 +1652,27 @@ class CardDetector:
             line_support_score=candidate.line_support_score,
             agreement_score=candidate.agreement_score,
             interior_detail_score=candidate.interior_detail_score,
+            interior_complexity_score=candidate.interior_complexity_score,
+            border_contrast_score=candidate.border_contrast_score,
+            foreground_score=candidate.foreground_score,
+            nested_candidate_score=candidate.nested_candidate_score,
             background_penalty=candidate.background_penalty,
+            oversize_penalty=candidate.oversize_penalty,
+            uniform_surface_penalty=candidate.uniform_surface_penalty,
+            small_area_penalty=candidate.small_area_penalty,
+            ratio_penalty=candidate.ratio_penalty,
+            partial_evidence_bonus=candidate.partial_evidence_bonus,
             occlusion_penalty=candidate.occlusion_penalty,
             inferred_edges=candidate.inferred_edges,
             area_ratio=candidate.area_ratio,
             observed_ratio=candidate.observed_ratio,
             border_touches=candidate.border_touches,
+            candidate_id=candidate.candidate_id,
+            contains_candidates=tuple(candidate.contains_candidates),
+            contained_by_candidates=tuple(candidate.contained_by_candidates),
+            overlap_candidates=tuple(candidate.overlap_candidates),
+            rejection_reasons=tuple(candidate.rejection_reasons),
+            contextual_scored=candidate.contextual_scored,
         )
 
     def _same_geometry(self, first: _Candidate, second: _Candidate) -> bool:
@@ -1189,6 +1723,17 @@ class CardDetector:
             ambiguity_penalty = 0.0
             margin_bonus = min(0.07, margin * 0.22)
         confidence = best.total_score - ambiguity_penalty + margin_bonus
+        ambiguity_review_floor = False
+        if (
+            ambiguity_penalty >= self.config.ambiguity_close_penalty
+            and best.total_score >= 0.60
+            and best.ratio_score >= 0.60
+            and best.edge_score >= 0.75
+        ):
+            # Two strong, genuinely card-like regions are a review case, not
+            # evidence that neither region exists.
+            confidence = max(confidence, self.config.medium_confidence)
+            ambiguity_review_floor = True
         if best.area_ratio < self.config.tiny_area_ratio:
             confidence = min(confidence - 0.08, 0.52)
         if best.inferred_edges == 1:
@@ -1202,6 +1747,7 @@ class CardDetector:
             "margin_over_second": round(margin, 4),
             "margin_bonus": round(margin_bonus, 4),
             "ambiguity_penalty": round(ambiguity_penalty, 4),
+            "ambiguity_review_floor": ambiguity_review_floor,
             "inferred_edges": best.inferred_edges,
             "final_confidence": round(confidence, 4),
         }
@@ -1321,10 +1867,29 @@ class CardDetector:
             anchor = tuple(points[0])
             cv2.putText(
                 overlay,
-                f"C{index} {candidate.total_score:.2f} E{candidate.inferred_edges}",
+                (
+                    f"{candidate.candidate_id or f'C{index}'} "
+                    f"T{candidate.total_score:.2f} R{candidate.ratio_score:.2f} "
+                    f"A{candidate.area_score:.2f}"
+                ),
                 anchor,
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.45,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
+            detail_anchor = (anchor[0], anchor[1] + 16)
+            cv2.putText(
+                overlay,
+                (
+                    f"O{candidate.oversize_penalty:.2f} "
+                    f"I{candidate.interior_complexity_score:.2f} "
+                    f"N{candidate.nested_candidate_score:.2f}"
+                ),
+                detail_anchor,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.40,
                 color,
                 1,
                 cv2.LINE_AA,

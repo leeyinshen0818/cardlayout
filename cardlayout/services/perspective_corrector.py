@@ -29,7 +29,9 @@ class PerspectiveCorrector:
         self.card_size = card_size
         self.config = config or PerspectiveConfig()
         self.debug = debug
-        self.corner_refiner = PreciseCornerRefiner(self.config, debug=debug)
+        self.corner_refiner = PreciseCornerRefiner(
+            self.config, debug=debug, target_ratio=self.target_ratio
+        )
 
     @property
     def target_ratio(self) -> float:

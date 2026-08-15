@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from math import acos, degrees
+from math import acos, degrees, log
 
 import cv2
 import numpy as np
@@ -37,9 +37,11 @@ class PreciseCornerRefiner:
         self,
         config: PerspectiveConfig | None = None,
         debug: bool = False,
+        target_ratio: float | None = None,
     ) -> None:
         self.config = config or PerspectiveConfig()
         self.debug = debug
+        self.target_ratio = target_ratio
 
     def refine(
         self,
@@ -150,6 +152,33 @@ class PreciseCornerRefiner:
             else:
                 final_edges.append(result)
                 active_lines.append(np.asarray(result.line, dtype=np.float64))
+
+        excessive_edge = next(
+            (
+                edge
+                for edge in final_edges
+                if not edge.inferred
+                and edge.rough_offset_px
+                > short_side * self.config.maximum_edge_displacement_fraction
+            ),
+            None,
+        )
+        if excessive_edge is not None:
+            return self._result_with_metrics(
+                rough,
+                rough,
+                final_edges,
+                roi_box,
+                scale,
+                edge_debug,
+                roi,
+                detector_inferred_edges,
+                success=False,
+                fallback_reason=(
+                    "background_edge_hijack: excessive_edge_displacement "
+                    f"({excessive_edge.name})."
+                ),
+            )
 
         if len(weak_indices) == 4:
             return self._result_with_metrics(
@@ -573,8 +602,11 @@ class PreciseCornerRefiner:
             return False, "Refined corners do not form a convex card."
         rough_area = abs(float(cv2.contourArea(rough)))
         refined_area = abs(float(cv2.contourArea(refined)))
-        if rough_area < 1 or not 0.72 <= refined_area / rough_area <= 1.30:
+        area_ratio = refined_area / max(rough_area, 1.0)
+        if rough_area < 1 or area_ratio < self.config.minimum_refined_area_fraction:
             return False, "Refined card area disagrees with detection geometry."
+        if area_ratio > self.config.maximum_refined_area_expansion:
+            return False, "background_edge_hijack: excessive_area_expansion."
         short_side = self._short_side(rough)
         distances = np.linalg.norm(refined - rough, axis=1)
         if float(distances.max()) > short_side * self.config.maximum_corner_displacement_fraction:
@@ -582,6 +614,17 @@ class PreciseCornerRefiner:
         edges = [float(np.linalg.norm(refined[(i + 1) % 4] - refined[i])) for i in range(4)]
         if min(edges) < max(6.0, short_side * 0.18):
             return False, "A refined card edge collapsed."
+        if self.target_ratio is not None:
+            rough_error = abs(log(self._quad_ratio(rough) / self.target_ratio))
+            refined_error = abs(log(self._quad_ratio(refined) / self.target_ratio))
+            error_increase = refined_error - rough_error
+            if error_increase > self.config.maximum_ratio_error_increase:
+                return False, "background_edge_hijack: ratio became less card-like."
+            if (
+                area_ratio > self.config.hijack_area_expansion
+                and error_increase > self.config.hijack_ratio_error_increase
+            ):
+                return False, "background_edge_hijack: outward expansion worsened ratio."
         return True, None
 
     def _result_with_metrics(
@@ -606,6 +649,10 @@ class PreciseCornerRefiner:
         )
         diagnostic = refined if diagnostic_refined is None else diagnostic_refined
         displacements = np.linalg.norm(diagnostic - rough, axis=1)
+        rough_area = max(abs(float(cv2.contourArea(rough))), 1.0)
+        refined_area_ratio = abs(float(cv2.contourArea(diagnostic))) / rough_area
+        rough_ratio = self._quad_ratio(rough)
+        refined_ratio = self._quad_ratio(diagnostic)
         short_side = max(self._short_side(rough), 1.0)
         agreement = float(np.exp(-float(displacements.max()) / (short_side * 0.07)))
         strong_count = sum(not edge.inferred for edge in edges)
@@ -675,10 +722,20 @@ class PreciseCornerRefiner:
             "roi_box": roi_box,
             "roi_scale": round(scale, 5),
             "strong_edge_count": strong_count,
+            "refined_area_ratio": round(refined_area_ratio, 5),
+            "rough_geometry_ratio": round(rough_ratio, 5),
+            "refined_geometry_ratio": round(refined_ratio, 5),
+            "target_ratio": (
+                round(self.target_ratio, 5) if self.target_ratio is not None else None
+            ),
+            "background_hijack_detected": bool(
+                fallback_reason and "background_edge_hijack" in fallback_reason
+            ),
+            "refinement_rejection_reason": fallback_reason if not success else None,
         }
         if self.debug:
             metrics["stage_images"] = self._debug_images(
-                roi, rough, diagnostic, roi_box, scale, edge_debug, edges
+                roi, rough, diagnostic, roi_box, scale, edge_debug, edges, success
             )
         LOGGER.debug(
             "corner_refinement %s",
@@ -716,6 +773,7 @@ class PreciseCornerRefiner:
         scale: float,
         debug: dict[str, _EdgeDebug],
         edges: list[EdgeFitResult],
+        success: bool,
     ) -> dict[str, Image.Image]:
         left, top, _, _ = roi_box
         rough_local = rough.copy()
@@ -761,11 +819,12 @@ class PreciseCornerRefiner:
         cv2.polylines(
             fit, [np.round(rough_local).astype(np.int32)], True, (255, 165, 35), 2
         )
+        refined_color = (40, 225, 95) if success else (235, 65, 80)
         cv2.polylines(
-            fit, [np.round(refined_local).astype(np.int32)], True, (40, 225, 95), 3
+            fit, [np.round(refined_local).astype(np.int32)], True, refined_color, 3
         )
         for point in refined_local:
-            cv2.circle(fit, tuple(np.round(point).astype(int)), 7, (40, 225, 95), 2)
+            cv2.circle(fit, tuple(np.round(point).astype(int)), 7, refined_color, 2)
         evidence_image = np.clip(evidence * 255, 0, 255).astype(np.uint8)
         return {
             "rough_and_search_bands": Image.fromarray(bands).copy(),
@@ -784,14 +843,23 @@ class PreciseCornerRefiner:
             float(np.linalg.norm(points[2] - points[1])),
             float(np.linalg.norm(points[3] - points[0])),
         )
-        padding_x = width * self.config.roi_padding_fraction
-        padding_y = height * self.config.roi_padding_fraction
+        padding = min(width, height) * self.config.roi_padding_fraction
         return (
-            max(0, int(np.floor(points[:, 0].min() - padding_x))),
-            max(0, int(np.floor(points[:, 1].min() - padding_y))),
-            min(image_width, int(np.ceil(points[:, 0].max() + padding_x)) + 1),
-            min(image_height, int(np.ceil(points[:, 1].max() + padding_y)) + 1),
+            max(0, int(np.floor(points[:, 0].min() - padding))),
+            max(0, int(np.floor(points[:, 1].min() - padding))),
+            min(image_width, int(np.ceil(points[:, 0].max() + padding)) + 1),
+            min(image_height, int(np.ceil(points[:, 1].max() + padding)) + 1),
         )
+
+    @staticmethod
+    def _quad_ratio(points: np.ndarray) -> float:
+        lengths = [
+            float(np.linalg.norm(points[(index + 1) % 4] - points[index]))
+            for index in range(4)
+        ]
+        first = (lengths[0] + lengths[2]) / 2.0
+        second = (lengths[1] + lengths[3]) / 2.0
+        return max(first, second) / max(1e-6, min(first, second))
 
     @staticmethod
     def _short_side(points: np.ndarray) -> float:
