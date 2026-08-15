@@ -1,57 +1,161 @@
 # CardLayout
 
-CardLayout is a local desktop application for placing the front and back of a physical card on an A4 portrait page and exporting a print-ready PDF or JPG. It is a general card layout tool; Malaysia IC is simply the first built-in size preset.
+CardLayout is a privacy-friendly Windows desktop application for preparing the
+front and back of a physical card for accurate A4 printing. Import images or PDF
+pages, correct the card boundaries, preview the physical layout, and export a
+print-ready PDF or 300-DPI JPG.
 
-## Current capabilities (Phases 1–4)
+Everything runs locally. CardLayout does not upload documents, perform OCR, or
+require an internet connection.
 
-- Load Front and Back from JPG, JPEG, or PNG files.
-- Load Page 1 from separate PDF files, including mixed image/PDF input.
-- Open one PDF and map Page 1 to Front and Page 2 to Back. One-page PDFs leave Back empty; PDFs with more pages clearly report that only the first two are used.
-- Swap or clear either side without reloading source files.
-- Click Front or Back in the A4 preview to reveal floating controls for moving that side independently in 1 mm steps or resetting its position.
-- Preview the complete A4 portrait layout live.
-- Aspect-fit source images without stretching or cropping; unused space is letterboxed.
-- Export a physical A4 PDF intended for printing at **Actual Size / 100%**.
-- Export the full A4 page as a 300-DPI JPG (2480 × 3508 pixels).
-- Drag one PDF or up to two supported files onto the application.
-- Automatically attempt physical-card detection after every image or PDF-page import.
-- Crop surrounding background and correct ordinary in-plane rotation when confidence is acceptable.
-- Use a staged hybrid detector: fast contours first, higher-resolution color/line analysis when needed, then occlusion-aware reconstruction as a fallback.
-- Generate and fuse contour, rotated-rectangle, Hough-line, three-edge, and two-opposite-edge candidates across working scales.
-- Retain competing candidates for a second-stage comparison and model contains/contained-by/overlap relationships between card, paper, mat, phone, notebook, and other rectangular regions.
-- Rank candidates primarily by outer-boundary geometry, perspective-aware preset ratio, long-edge support, local edge support, and method agreement rather than choosing the largest contour or the most visually complex interior.
-- Prefer plausible physical perimeters over nested text, logo, chip, portrait, hologram, and printed-rectangle edges; interior complexity remains only a minor supporting signal so low-texture card backs are not penalized heavily.
-- Penalize oversized or border-touching background surfaces and weak reconstructed geometry without using OCR, identity templates, or content recognition.
-- Fail safely to the original image when detection confidence is low.
-- Automatically rectify reliable detected quadrilaterals into a front-facing landscape card at the active preset's exact aspect ratio.
-- Refine rough detector geometry at high resolution inside a padded local card ROI before rectification.
-- Fit the top, right, bottom, and left physical boundaries independently with direction-constrained, distributed-support RANSAC and a narrower second precision pass.
-- Combine grayscale/CLAHE, LAB, HSV, Canny, Sobel magnitude, and gradient-direction evidence without changing final image pixels.
-- Handle rounded corners by intersecting fitted straight boundary lines instead of snapping to curved contour tips.
-- Retain weak rough edges and lower confidence when physical boundary support is incomplete or partially occluded.
-- Track Top, Right, Bottom, and Left confidence independently; infer weak or hand-occluded edges conservatively from reliable neighbors, rough geometry, and the active card-size ratio.
-- Reject inward quad collapse, excessive expansion, large corner/edge/center shifts, and degraded target-ratio agreement unless strong distributed evidence supports the physical outer boundary.
-- Preserve source quality by applying one perspective transform from original-resolution pixels, with a configurable 1200-pixel preferred width and conservative upscale limit.
-- Compare Original, Detected, and Corrected previews, re-run detection, reset correction, or reset a side to its untouched original.
-- Adjust all four source corners manually in a dedicated editor with labeled handles, connecting lines, live rectified preview, mouse-wheel zoom, pan, Fit, 100%, reset-to-automatic, Apply, and Cancel.
-- Reject overlapping, crossing, out-of-bounds, non-convex, or near-zero-area manual corner geometry before it can be applied.
-- Keep manual corrections authoritative until the user resets correction, explicitly accepts re-detection, or imports a new source.
-- Click either side preview—or the compact Corrections button—to open a collapsible right sidebar with visual thumbnails for Soft, Normal, Sharp, Sharper, and five conservative brightness/contrast choices.
-- Reset the selected side's sharpening, brightness, and contrast directly from the Corrections sidebar without resetting its detection, corners, or A4 position.
-- Keep the Corrections sidebar outside the A4 viewport: opening it reflows and recenters the fully visible page, while collapsing it returns the width without changing correction, corner, placement, or source state.
-- Keep Front and Back appearance settings independent and render every selection non-destructively from the best geometry-corrected source.
-- Use a single side Reset action to discard manual corners and appearance presets while retaining the imported file and current automatic result.
-- Use the same best-stage priority for A4 preview, PDF, and JPG: manual correction, automatic correction, detected crop, then original.
+## Highlights
 
-The current preset is **Malaysia IC — 85.6 × 54 mm**. Both cards are centered horizontally. The default pair is shifted 15 mm lower than the original Phase 1 position: Front starts 51.6 mm from the page top and Back starts at 125.6 mm, leaving a 20 mm gap. Each side can then be moved independently while remaining inside the A4 page.
+- Import JPG, JPEG, PNG, and PDF sources.
+- Open a two-page PDF as Front and Back in one step.
+- Automatically detect the physical card boundary and correct perspective.
+- Handle low-texture card backs, weak edges, rounded corners, internal printed
+  rectangles, and partial hand occlusion conservatively.
+- Adjust all four corners manually when automatic detection needs review.
+- Apply independent sharpening and brightness/contrast presets to Front and Back.
+- Move Front and Back vertically in precise 1 mm steps.
+- Preview the complete A4 portrait page at the correct relative dimensions.
+- Export an A4 PDF or a 300-DPI JPG directly to Downloads.
+- Run as a single standalone `CardLayout.exe` with no Python installation.
+- Start maximized and automatically use a compact layout on smaller or
+  display-scaled laptops.
 
-## Privacy
+## Typical workflow
 
-All file processing is local. CardLayout does not upload files, call web services, perform OCR, or log document content. PDF pages are rendered directly in memory, so no hidden page-image copies are produced.
+1. Open a two-page PDF, choose separate Front and Back files, or drag supported
+   files into the window.
+2. Review the automatically detected and perspective-corrected card images.
+3. Select **Adjust Corners** if a physical boundary needs manual correction.
+4. Click either card preview to open its Corrections sidebar or position controls.
+5. Review the A4 preview.
+6. Select **Export PDF** or **Export JPG · 300 DPI**.
 
-## Install and run
+Exports are saved automatically in the Windows Downloads folder. Existing files
+are never overwritten; CardLayout creates names such as `card-layout (1).pdf`.
+After export, Windows Explorer opens the containing folder automatically.
 
-Python 3.10 or newer is required. From the project directory:
+## Input behavior
+
+CardLayout supports:
+
+- Individual `.jpg`, `.jpeg`, `.png`, and `.pdf` files for either side
+- One two-page PDF, mapped as Page 1 → Front and Page 2 → Back
+- One-page PDFs, which leave Back empty
+- PDFs with more than two pages, using only the first two pages with a notice
+- Drag and drop of one PDF or up to two supported files
+
+PDF pages are rendered at high quality before entering the shared raster pipeline.
+For PDF input only, border-connected white, off-white, cream, or light-gray page
+whitespace can be removed before card detection. A safety margin protects rounded
+corners, shadows, and weak card edges. JPG and PNG files do not receive this
+PDF-specific trimming.
+
+## Detection and correction
+
+CardLayout uses a geometry-first OpenCV pipeline. It prioritizes the expected
+outer perimeter, long-edge support, the selected card-size ratio, and consistency
+with the rough detected region. Text, portraits, chips, logos, holograms, and
+internal rectangles are not treated as dominant evidence.
+
+The top, right, bottom, and left edge confidences are tracked independently. A
+weak or partly covered edge lowers confidence instead of forcing detection onto a
+smaller internal rectangle. Suspicious refinements are rejected when they shrink,
+expand, shift, or distort the rough card geometry without strong boundary support.
+
+The image used for preview and export follows this safe fallback order:
+
+1. Valid manual corner correction
+2. Validated automatic perspective correction
+3. Rough detected card crop
+4. Original normalized image
+
+A questionable refinement never replaces a usable rough detection. CardLayout
+shows a review recommendation when it cannot confidently recover the full physical
+boundary.
+
+### Manual corners
+
+The corner editor provides four labeled handles, connecting lines, a live
+rectified preview, zoom, pan, Fit, 100%, reset-to-automatic, Apply, and Cancel.
+Invalid crossing, overlapping, non-convex, out-of-bounds, or near-zero-area corner
+arrangements cannot be applied.
+
+### Image corrections
+
+The collapsible right sidebar provides thumbnail previews for:
+
+- Sharpen / Soften: Soft, Normal, Sharp, Sharper
+- Brightness / Contrast: Normal, Bright +10, Bright +20,
+  Bright + Contrast, Strong Bright + Contrast
+
+Front and Back keep independent settings. **Reset corrections** restores only the
+selected side's appearance. The side-level **Reset** restores automatic geometry
+and Normal appearance without reloading the source file.
+
+Opening or closing the sidebar only changes the UI viewport. It does not rerun
+detection, reload images, reset corners, or change physical A4 coordinates.
+
+## A4 layout and exports
+
+The built-in card preset is **Malaysia IC — 85.6 × 54 mm**. Both sides are
+centered horizontally on an A4 portrait page.
+
+| Setting | Value |
+| --- | ---: |
+| A4 page | 210 × 297 mm |
+| Front top position | 51.6 mm |
+| Back top position | 125.6 mm |
+| Gap between cards | 20 mm |
+| JPG output | 2480 × 3508 px at 300 DPI |
+
+Front and Back can each be moved up or down independently in 1 mm steps and reset
+to their default position. These adjustments change physical placement; opening
+the Corrections sidebar or resizing the window does not.
+
+For correctly sized output, print the exported PDF using **Actual Size** or
+**100%**. Do not select Fit, Shrink, or Scale to Page.
+
+## Standalone Windows app
+
+The packaged application is one file:
+
+```text
+dist\CardLayout.exe
+```
+
+Copy only `CardLayout.exe` to the Desktop or any other folder on another Windows
+computer and double-click it. The target computer does not need Python, pip,
+VS Code, or separate dependencies.
+
+The executable:
+
+- Uses the bundled CardLayout icon in Explorer, the app window, and the taskbar
+- Opens without a console window
+- Starts maximized
+- Bundles PySide6, OpenCV, NumPy, Pillow, PyMuPDF, and required Qt resources
+- Excludes the `tests` and `testing` directories
+
+Because this is a PyInstaller one-file build, the first launch can take a little
+longer while bundled files are extracted to a temporary directory. That temporary
+runtime is cleaned up when the application closes.
+
+## Responsive UI
+
+CardLayout chooses its interface density from the available Qt logical screen
+size, which accounts for Windows display scaling. Common laptop workspaces such
+as 1600 × 900, 1536 × 864, and 1280 × 720 automatically use a compact layout.
+Larger desktop displays retain the standard spacing.
+
+Compact mode reduces panel width, preview height, fonts, button size, margins, and
+spacing while keeping the same controls and physical A4 placement.
+
+## Run from source
+
+Python 3.10 or newer is required.
 
 ```powershell
 python -m venv .venv
@@ -60,58 +164,76 @@ python -m pip install -e ".[dev]"
 python -m cardlayout
 ```
 
-The installed console command `cardlayout` can also launch the app.
+The installed command can also launch the application:
 
-## Development and tests
+```powershell
+cardlayout
+```
 
-Install the development dependencies as shown above, then run:
+## Build the standalone EXE
+
+Build on Windows with PyInstaller:
+
+```powershell
+python -m pip install -e ".[dev]" pyinstaller
+powershell -ExecutionPolicy Bypass -File .\build_windows.ps1
+```
+
+The completed single-file application is written to:
+
+```text
+dist\CardLayout.exe
+```
+
+The PyInstaller configuration is stored in `packaging\CardLayout.spec`. Resource
+paths are resolved for both source execution and PyInstaller's temporary one-file
+runtime, so the build does not depend on development-machine absolute paths.
+
+## Tests
+
+Run the complete test suite with:
 
 ```powershell
 python -m pytest
 ```
 
-Tests cover JPG/PNG normalization, one/two/multi-page PDFs, invalid input, A4/card geometry, PDF/JPG export, consistent placement, detection scoring and geometry, rotated cards, clutter, ambiguous candidates, nested rectangles, white/light/dark support surfaces, low-texture and uniform-blue card backs, paired front/back geometry, nearby phones and notebooks, blank-paper rejection, safe failure, perspective ordering and validation, robust line fitting and outlier rejection, local search bands, rounded boundaries, one-edge/one-corner/two-edge hand occlusion, color-only edges, strong internal printed/logo/text/chip rectangles, inward-collapse rejection, refinement fallback and background-hijack rejection, exact preset ratios, independent image-correction state, deterministic preset strength, non-cumulative rendering, correction-aware JPG/PDF export, draggable corner controls, zoom/pan coordinate stability, and UI interactions. Tests do not require manually opening the GUI.
+The tests cover input normalization, PDF/JPG parity, PDF frame trimming, layout
+geometry, exporters, detection scoring, low-texture backs, nested rectangles,
+partial edge and corner occlusion, perspective refinement, collapse protection,
+manual corners, appearance corrections, reset behavior, responsive UI, and
+sidebar interactions. GUI tests run without manually opening the application.
 
-## Standalone Windows build
+## Privacy
 
-Install the project dependencies and PyInstaller on the build computer, then run:
+- All image and PDF processing happens locally.
+- No source files or document contents are uploaded.
+- No OCR, face recognition, template matching, cloud service, or AI reconstruction
+  is used.
+- PDF pages are rendered in memory; hidden page-image files are not created.
+- Detection diagnostics contain numeric geometry and confidence data, not document
+  image content.
 
-```powershell
-python -m pip install -r requirements.txt pyinstaller
-powershell -ExecutionPolicy Bypass -File .\build_windows.ps1
-```
-
-The windowed single-file build is written to `dist\CardLayout.exe`. Copy only
-that EXE to the Desktop (or any folder) on another Windows computer and launch
-it directly; the target computer does not need Python, pip, VS Code, or separate
-dependencies. The build does not include the project's `tests` or `testing`
-directories. A one-file app extracts its bundled runtime to a temporary folder
-while running, then cleans that temporary copy when it closes.
-
-## Architecture
+## Project structure
 
 ```text
 cardlayout/
-  models/       CardSide, detection/perspective state, size and A4 layout models
-  services/     loading, OpenCV detection/rectification, rendering, exporters
-  ui/           input widgets, four-corner editor, comparison and A4 previews
-tests/          input, detection, perspective, state, layout, export, and UI tests
+  models/       Card, detection, correction, size, and A4 layout state
+  services/     Input, normalization, detection, rectification, and export
+  ui/           Main window, card widgets, corner editor, and A4 preview
+icon/            Application icon
+packaging/       PyInstaller specification
+tests/           Automated regression tests
+build_windows.ps1
 ```
 
-`CardSide.original_image` always preserves the normalized input. A successful `CardDetectionResult` stores confidence, bounding geometry, polygon points, rotation, candidate method, tuning metrics, and a separate `detected_image`. `PerspectiveResult` separately stores ordered/refined source corners, destination geometry, confidence, warnings, output dimensions, transform data, and `rectified_image`. Automatic and manual results remain distinct; `CardSide.best_image` is the single source of truth for layout and export. Resetting never reopens or recompresses the source.
+`CardSide.original_image` preserves the normalized source. Detection, automatic
+perspective correction, manual correction, and appearance settings remain separate
+states. `CardSide.best_image` is the single source used by the side previews, A4
+preview, PDF exporter, and JPG exporter.
 
-Detection normally starts at a 1100-pixel long edge. Weak or ambiguous cases retry at up to 1800 pixels with LAB/HSV color edges and line detection, then up to 2400 pixels for partial-edge reconstruction. Geometry is mapped back to the original resolution, and the final rotated crop is made from the full-resolution source. All scales, thresholds, weights, penalties, and confidence cutoffs live in `CardDetectionConfig` rather than being scattered through the detector.
+## Current scope
 
-Optional debug mode retains original/working images, edge and threshold maps, Hough segments, candidate polygons and hierarchy, inferred-edge counts, component scores and penalties, rejection reasons, the winner and runner-up, confidence reasoning, scales, and processing time in memory only. Candidate overlays show total, ratio, area, oversize, interior-complexity, and nested scores. Structured debug logging contains numeric detection diagnostics but no image content or personal data.
-
-Perspective correction consumes the detector's original-image polygon instead of re-detecting. Corners are normalized to top-left, top-right, bottom-right, and bottom-left; physical edges are refined as described below, validated, and transformed once from the original-resolution image. Medium-confidence detection, inferred geometry, or image-boundary clipping remains usable but is labeled **Review correction**.
-
-Phase 3.2 treats detector corners as mandatory spatial context. It pads the detected card by 10% of its short side, caps exceptionally large refinement ROIs at a high-resolution 2600-pixel long edge, and searches only narrow bands around each expected boundary. The first pass tolerates rough detector error; the second pass is centered on the initial fit. RANSAC hypotheses must have spatially distributed gradient support, plausible orientation, and a strong proximity preference for the expected physical perimeter. Top, Right, Bottom, and Left retain separate confidence and signed rough-edge displacement. Weak or occluded edges stay anchored to the rough geometry and use reliable neighboring/opposite edges plus the active preset ratio only as conservative tie-breakers. Final validation compares refined/rough area, corners, edges, center, and target-ratio error. A suspicious inward collapse, outward expansion, center shift, or ratio regression falls back to stored rough corners for review; a bad refinement never replaces usable rough geometry.
-
-Perspective debug mode additionally exposes rough geometry, search bands, raw edge evidence, inliers and rejected outliers, fitted physical lines, final intersections, per-edge scores/support/residuals, per-corner confidence, rough-to-refined displacement, refinement confidence, and fallback reason. Images remain in memory unless a developer explicitly saves them.
-
-Phase 4 adds manual appearance correction after the geometry pipeline. Preset parameters live in `models/image_correction.py`; thumbnails are generated from small copies, while each selected full-size result is cached from the unchanged geometry source. A single selected-side state coordinates the left previews, A4 cards, independent position controls, and collapsible right Corrections sidebar. Sidebar visibility changes only the splitter viewport, so the A4 page refits without changing physical layout coordinates or image-processing state. `CardSide.best_image` remains the shared source for the side preview, A4 preview, JPG export, and PDF export. The normal left panel exposes only Choose, Clear, Adjust Corners, and Reset; technical detection stages remain available internally and through debug data.
-
-## Not implemented yet
-
-Background segmentation/removal, automatic enhancement or white balance, saturation controls, restoration, denoise, deblur, OCR, upside-down content recognition, and AI features are not implemented. Manual Phase 4 presets only adjust existing pixels and cannot reconstruct missing detail.
+CardLayout does not include background removal, white balance, saturation controls,
+restoration, denoise, deblur, OCR, orientation recognition, or AI-based image
+reconstruction. Appearance presets adjust existing pixels and cannot restore
+missing detail.
