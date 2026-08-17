@@ -56,8 +56,10 @@ class PageRenderer:
     ) -> Image.Image:
         page_layout = self.engine.calculate()
         page = Image.new("RGB", self.engine.page_pixels(dpi), "white")
-        self._paste_side(page, front, page_layout.front, dpi, "FRONT — empty")
-        self._paste_side(page, back, page_layout.back, dpi, "BACK — empty")
+        if front is not None:
+            self._paste_side(page, front, page_layout.front, dpi, "FRONT")
+        if back is not None:
+            self._paste_side(page, back, page_layout.back, dpi, "BACK")
         return page
 
     def _paste_side(

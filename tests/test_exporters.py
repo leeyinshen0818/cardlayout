@@ -6,6 +6,7 @@ from PIL import Image
 from cardlayout.models.card_size import MALAYSIA_IC
 from cardlayout.models.layout import A4_LAYOUT
 from cardlayout.models.image_correction import ImageCorrectionState
+from cardlayout.models.orientation import OrientationState
 from cardlayout.models.perspective import PerspectiveResult
 from cardlayout.services.image_exporter import ImageExporter
 from cardlayout.services.input_loader import InputLoader
@@ -46,6 +47,92 @@ def test_pdf_is_real_a4_page(tmp_path: Path, export_setup) -> None:
         rect = document[0].rect
         assert rect.width == pytest.approx(595.28, abs=0.05)
         assert rect.height == pytest.approx(841.89, abs=0.05)
+
+
+def test_front_only_preview_renderer_and_exports_leave_back_area_blank(
+    tmp_path: Path, export_setup
+) -> None:
+    import pymupdf as fitz
+
+    engine, renderer, front, _ = export_setup
+    layout = engine.calculate()
+    back_bounds = engine.rect_at_dpi(layout.back, 300)
+    jpg_path = tmp_path / "front-only.jpg"
+    pdf_path = tmp_path / "front-only.pdf"
+
+    rendered = renderer.render_page(front, None, 300)
+    ImageExporter(renderer).export(jpg_path, front, None)
+    PDFExporter(renderer).export(pdf_path, front, None)
+
+    def back_region(image: Image.Image) -> Image.Image:
+        return image.convert("RGB").crop(back_bounds)
+
+    assert set(back_region(rendered).getdata()) == {(255, 255, 255)}
+    with Image.open(jpg_path) as jpg:
+        assert min(min(pixel) for pixel in back_region(jpg).getdata()) >= 250
+    with fitz.open(pdf_path) as document:
+        pixmap = document[0].get_pixmap(
+            matrix=fitz.Matrix(300 / 72, 300 / 72), alpha=False
+        )
+        page = Image.frombytes(
+            "RGB", (pixmap.width, pixmap.height), pixmap.samples
+        )
+        assert min(min(pixel) for pixel in back_region(page).getdata()) >= 250
+
+
+def test_independent_orientation_is_used_by_jpg_and_pdf_exports(
+    tmp_path: Path, export_setup
+) -> None:
+    import pymupdf as fitz
+
+    engine, renderer, front, back = export_setup
+    front_geometry = Image.new("RGB", (856, 540), (230, 30, 20))
+    front_geometry.paste((20, 210, 40), (428, 0, 856, 540))
+    back_geometry = Image.new("RGB", (856, 540), (20, 40, 230))
+    back_geometry.paste((235, 220, 20), (0, 270, 856, 540))
+    front.apply_automatic_correction(
+        PerspectiveResult(success=True, rectified_image=front_geometry)
+    )
+    back.apply_automatic_correction(
+        PerspectiveResult(success=True, rectified_image=back_geometry)
+    )
+    front.apply_orientation(OrientationState(flip_horizontal=True))
+    back.apply_orientation(OrientationState(flip_vertical=True))
+
+    jpg_path = tmp_path / "oriented.jpg"
+    pdf_path = tmp_path / "oriented.pdf"
+    ImageExporter(renderer).export(jpg_path, front, back)
+    PDFExporter(renderer).export(pdf_path, front, back)
+
+    layout = engine.calculate()
+    front_bounds = engine.rect_at_dpi(layout.front, 300)
+    back_bounds = engine.rect_at_dpi(layout.back, 300)
+    samples = (
+        (
+            front_bounds[0] + (front_bounds[2] - front_bounds[0]) // 4,
+            (front_bounds[1] + front_bounds[3]) // 2,
+        ),
+        (
+            (back_bounds[0] + back_bounds[2]) // 2,
+            back_bounds[1] + (back_bounds[3] - back_bounds[1]) // 4,
+        ),
+    )
+
+    with Image.open(jpg_path) as jpg:
+        jpg_colors = [jpg.convert("RGB").getpixel(point) for point in samples]
+    with fitz.open(pdf_path) as document:
+        pixmap = document[0].get_pixmap(
+            matrix=fitz.Matrix(300 / 72, 300 / 72), alpha=False
+        )
+        pdf_page = Image.frombytes(
+            "RGB", (pixmap.width, pixmap.height), pixmap.samples
+        )
+        pdf_colors = [pdf_page.getpixel(point) for point in samples]
+
+    for color in (jpg_colors[0], pdf_colors[0]):
+        assert color[1] > 170 and color[0] < 70
+    for color in (jpg_colors[1], pdf_colors[1]):
+        assert color[0] > 190 and color[1] > 180 and color[2] < 70
 
 
 def test_pdf_and_jpg_put_both_sides_at_same_positions(tmp_path: Path, export_setup) -> None:

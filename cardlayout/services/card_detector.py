@@ -48,6 +48,9 @@ class _Candidate:
     area_score: float
     rectangularity_score: float
     line_support_score: float
+    parallelism_score: float
+    corner_score: float
+    perspective_score: float
     agreement_score: float
     interior_detail_score: float
     interior_complexity_score: float
@@ -99,6 +102,9 @@ class _Candidate:
             "area_score": round(self.area_score, 4),
             "rectangularity_score": round(self.rectangularity_score, 4),
             "line_support_score": round(self.line_support_score, 4),
+            "parallelism_score": round(self.parallelism_score, 4),
+            "corner_score": round(self.corner_score, 4),
+            "perspective_score": round(self.perspective_score, 4),
             "agreement_score": round(self.agreement_score, 4),
             "interior_detail_score": round(self.interior_detail_score, 4),
             "interior_complexity_score": round(self.interior_complexity_score, 4),
@@ -267,7 +273,15 @@ class CardDetector:
             (
                 candidate
                 for candidate in fused[1:]
-                if not subordinate_reasons.intersection(candidate.rejection_reasons)
+                if (
+                    not subordinate_reasons.intersection(
+                        candidate.rejection_reasons
+                    )
+                    # A candidate marked internal to some *other* rejected
+                    # scene rectangle is still an independent alternative to
+                    # the selected card and must contribute ambiguity.
+                    or candidate.candidate_id not in best.contains_candidates
+                )
             ),
             None,
         )
@@ -304,7 +318,10 @@ class CardDetector:
         rotation_angle = self._long_edge_angle(polygon)
         method = "hybrid:" + "+".join(sorted(best.strategy_groups))
 
-        if confidence < self.config.medium_confidence:
+        if (
+            confidence < self.config.medium_confidence
+            or best.area_ratio < self.config.tiny_area_ratio
+        ):
             level = (
                 "low" if confidence >= self.config.low_confidence else "none"
             )
@@ -1018,8 +1035,8 @@ class CardDetector:
         line_support_score: float,
         inferred_edges: int,
     ) -> _Candidate | None:
-        polygon = np.asarray(polygon, dtype=np.float32).reshape(4, 2)
-        if not np.isfinite(polygon).all():
+        polygon = self._normalize_quad(polygon)
+        if polygon is None:
             return None
         height, width = image_shape
         raw_area = abs(float(cv2.contourArea(polygon)))
@@ -1028,6 +1045,10 @@ class CardDetector:
         visible = polygon.copy()
         visible[:, 0] = np.clip(visible[:, 0], 0, width - 1)
         visible[:, 1] = np.clip(visible[:, 1], 0, height - 1)
+        normalized_visible = self._normalize_quad(visible)
+        if normalized_visible is None:
+            return None
+        visible = normalized_visible
         visible_area = abs(float(cv2.contourArea(visible)))
         if visible_area / raw_area < 0.72:
             return None
@@ -1065,6 +1086,18 @@ class CardDetector:
             / self.config.ratio_log_tolerance
         )
         edge_score = self._edge_support(edge_map, polygon)
+        parallelism_score, corner_score, perspective_score = self._quad_geometry_scores(
+            polygon
+        )
+        geometry_score = float(
+            np.clip(
+                0.50 * geometry_score
+                + 0.28 * corner_score
+                + 0.22 * parallelism_score,
+                0.0,
+                1.0,
+            )
+        )
         interior_detail_score = self._interior_detail(edge_map, polygon)
         background_penalty = (
             self.config.plain_rectangle_penalty
@@ -1096,6 +1129,9 @@ class CardDetector:
                 np.clip(rectangularity_score, 0.0, 1.0)
             ),
             line_support_score=float(np.clip(line_support_score, 0.0, 1.0)),
+            parallelism_score=parallelism_score,
+            corner_score=corner_score,
+            perspective_score=perspective_score,
             agreement_score=0.0,
             interior_detail_score=interior_detail_score,
             interior_complexity_score=0.0,
@@ -1124,11 +1160,13 @@ class CardDetector:
         # of a detailed chip, portrait frame, logo, or printed rectangle.
         candidate.full_card_boundary_score = float(
             np.clip(
-                0.29 * candidate.edge_score
-                + 0.24 * candidate.line_support_score
-                + 0.21 * candidate.geometry_score
-                + 0.18 * candidate.ratio_score
-                + 0.08 * candidate.agreement_score,
+                0.25 * candidate.edge_score
+                + 0.21 * candidate.line_support_score
+                + 0.18 * candidate.geometry_score
+                + 0.13 * candidate.parallelism_score
+                + 0.10 * candidate.perspective_score
+                + 0.08 * candidate.ratio_score
+                + 0.05 * candidate.agreement_score,
                 0.0,
                 1.0,
             )
@@ -1151,6 +1189,8 @@ class CardDetector:
                 + candidate.edge_score * weights.edge_support
                 + candidate.rectangularity_score * weights.rectangularity
                 + candidate.line_support_score * weights.line_support
+                + candidate.parallelism_score * weights.parallelism
+                + candidate.perspective_score * weights.perspective_quality
                 + candidate.agreement_score * weights.method_agreement
                 + candidate.interior_detail_score * weights.interior_detail
                 + candidate.interior_complexity_score * weights.interior_complexity
@@ -1206,6 +1246,9 @@ class CardDetector:
                 match.area_score = incoming.area_score
                 match.rectangularity_score = incoming.rectangularity_score
                 match.line_support_score = incoming.line_support_score
+                match.parallelism_score = incoming.parallelism_score
+                match.corner_score = incoming.corner_score
+                match.perspective_score = incoming.perspective_score
                 match.interior_detail_score = incoming.interior_detail_score
                 match.interior_complexity_score = incoming.interior_complexity_score
                 match.border_contrast_score = incoming.border_contrast_score
@@ -1271,10 +1314,12 @@ class CardDetector:
         elif "partial2" in strategies:
             source_bonus = -0.08
         return float(
-            0.30 * candidate.geometry_score
-            + 0.28 * candidate.ratio_score
-            + 0.24 * candidate.edge_score
-            + 0.18 * candidate.rectangularity_score
+            0.31 * candidate.geometry_score
+            + 0.20 * candidate.ratio_score
+            + 0.22 * candidate.edge_score
+            + 0.12 * candidate.rectangularity_score
+            + 0.08 * candidate.parallelism_score
+            + 0.07 * candidate.perspective_score
             + source_bonus
         )
 
@@ -1334,8 +1379,13 @@ class CardDetector:
                 * (3.0 - 2.0 * float(small_progress))
             )
             candidate.ratio_penalty = max(
-                0.0, (0.38 - candidate.ratio_score) / 0.38
-            ) * 0.09
+                0.0,
+                (
+                    self.config.poor_ratio_score_threshold
+                    - candidate.ratio_score
+                )
+                / self.config.poor_ratio_score_threshold,
+            ) * self.config.maximum_ratio_penalty
             recovery_limit = 0.0
             if candidate.inferred_edges == 1:
                 recovery_limit = self.config.one_edge_evidence_recovery
@@ -1400,19 +1450,72 @@ class CardDetector:
                 size_multiple = polygon_areas[parent_index] / polygon_areas[child_index]
                 size_score = float(np.clip(log(size_multiple) / log(10.0), 0.0, 1.0))
                 ratio_advantage = max(0.0, child.ratio_score - parent.ratio_score)
-                complexity_advantage = max(
-                    0.0,
-                    child.interior_complexity_score
-                    - parent.interior_complexity_score,
+                boundary_advantage = max(
+                    0.0, child.border_contrast_score - parent.border_contrast_score
+                )
+                geometry_advantage = max(
+                    0.0, child.geometry_score - parent.geometry_score
                 )
                 child_strength = float(
                     np.clip(
-                        0.52 * child.ratio_score
-                        + 0.30 * child.interior_complexity_score
-                        + 0.18 * child.border_contrast_score,
+                        0.30 * child.ratio_score
+                        + 0.24 * child.geometry_score
+                        + 0.22 * child.edge_score
+                        + 0.18 * child.border_contrast_score
+                        + 0.06 * child.perspective_score,
                         0.0,
                         1.0,
                     )
+                )
+                child_fraction = polygon_areas[child_index] / max(
+                    polygon_areas[parent_index], 1.0
+                )
+                nested_card_competitor = (
+                    0.06 <= child_fraction <= 0.55
+                    and child.area_ratio >= self.config.area_plateau_min_ratio
+                    and child.geometry_score >= 0.72
+                    and child.ratio_score >= 0.60
+                    and child.edge_score >= 0.58
+                    and (
+                        child.agreement_score >= 0.15
+                        or len(child.source_methods) >= 2
+                    )
+                    and (
+                        bool(
+                            {"partial2", "partial3"}
+                            & parent.strategy_groups
+                        )
+                        or parent.agreement_score < 0.20
+                        or child.border_contrast_score
+                        >= parent.border_contrast_score + 0.10
+                    )
+                )
+                # A large, directly observed child with a substantially more
+                # coherent perimeter usually means the parent mixed a card
+                # edge with a nearby desk, mat, or page edge. Do not classify
+                # that physical-card candidate as printed internal content.
+                child_has_stronger_coherent_boundary = (
+                    (
+                        0.62 <= child_fraction <= 0.88
+                        or (
+                            0.42 <= child_fraction < 0.62
+                            and parent.border_touches > 0
+                        )
+                    )
+                    and child.inferred_edges == 0
+                    and bool(
+                        {"contour", "rotated_rect", "line4"}
+                        & child.strategy_groups
+                    )
+                    and child.geometry_score >= 0.78
+                    and child.edge_score >= 0.70
+                    and child.perspective_score >= 0.70
+                    and (
+                        child.agreement_score >= 0.25
+                        or len(child.source_methods) >= 3
+                    )
+                    and child.border_contrast_score
+                    >= parent.border_contrast_score + 0.35
                 )
                 child.nested_candidate_score = max(
                     child.nested_candidate_score,
@@ -1421,7 +1524,8 @@ class CardDetector:
                             0.32
                             + 0.24 * size_score
                             + 0.24 * ratio_advantage
-                            + 0.20 * complexity_advantage,
+                            + 0.12 * boundary_advantage
+                            + 0.08 * geometry_advantage,
                             0.0,
                             1.0,
                         )
@@ -1432,9 +1536,9 @@ class CardDetector:
                     float(
                         np.clip(
                             0.42 * child.border_contrast_score
-                            + 0.28 * child.interior_complexity_score
+                            + 0.28 * child.geometry_score
                             + 0.30
-                            * max(ratio_advantage, complexity_advantage),
+                            * max(ratio_advantage, boundary_advantage),
                             0.0,
                             1.0,
                         )
@@ -1443,12 +1547,28 @@ class CardDetector:
                 parent_is_plausible_perimeter = (
                     parent.inferred_edges == 0
                     and bool(
-                        {"contour", "rotated_rect"} & parent.strategy_groups
+                        {"contour", "rotated_rect", "line4"}
+                        & parent.strategy_groups
                     )
-                    and parent.area_ratio <= self.config.oversize_start_ratio
+                    # A close-up card may legitimately occupy much more than
+                    # one third of the photo. Large area alone must not turn
+                    # its printed details into evidence that the card itself
+                    # is merely a background parent.
+                    and (
+                        (
+                            parent.area_ratio
+                            <= self.config.oversize_start_ratio
+                            and not nested_card_competitor
+                        )
+                        or (
+                            parent.area_ratio <= self.config.oversize_full_ratio
+                            and not nested_card_competitor
+                        )
+                    )
                     and parent.geometry_score >= 0.72
-                    and parent.ratio_score >= max(0.68, child.ratio_score - 0.16)
+                    and parent.ratio_score >= 0.35
                     and parent.edge_score >= 0.62
+                    and not child_has_stronger_coherent_boundary
                 )
                 if parent_is_plausible_perimeter:
                     parent.full_card_boundary_score = max(
@@ -1481,12 +1601,9 @@ class CardDetector:
                             )
                         ),
                     )
-                    child_fraction = polygon_areas[child_index] / max(
-                        polygon_areas[parent_index], 1.0
-                    )
-                    if child_fraction <= 0.68:
+                    if child_fraction <= 0.86:
                         inwardness = float(
-                            np.clip((0.68 - child_fraction) / 0.50, 0.0, 1.0)
+                            np.clip((0.86 - child_fraction) / 0.68, 0.0, 1.0)
                         )
                         perimeter_advantage = max(
                             0.0,
@@ -1498,7 +1615,7 @@ class CardDetector:
                             child.internal_subregion_penalty,
                             float(
                                 np.clip(
-                                    0.07
+                                    0.09
                                     + 0.10 * inwardness
                                     + 0.06 * perimeter_advantage,
                                     0.0,
@@ -1508,22 +1625,42 @@ class CardDetector:
                         )
                         child.candidate_coverage_score = min(
                             child.candidate_coverage_score,
-                            float(np.clip(child_fraction / 0.68, 0.0, 1.0)),
+                            float(np.clip(child_fraction / 0.86, 0.0, 1.0)),
                         )
                         rejection_sets[child_index].add("internal_subregion")
+                if child_has_stronger_coherent_boundary:
+                    boundary_gain = float(
+                        np.clip(
+                            child.border_contrast_score
+                            - parent.border_contrast_score,
+                            0.0,
+                            1.0,
+                        )
+                    )
+                    parent.background_penalty += 0.14 + 0.12 * boundary_gain
+                    rejection_sets[parent_index].add("mixed_background_boundary")
+                    child.foreground_score = max(child.foreground_score, 0.88)
+                    child.nested_candidate_score = max(
+                        child.nested_candidate_score, 0.92
+                    )
                 if (
                     child.inferred_edges == 0
                     and child.area_ratio >= self.config.area_plateau_min_ratio
                     and child_strength >= 0.46
                     and not parent_is_plausible_perimeter
                     and (
+                        nested_card_competitor
+                        or
                         parent.area_ratio >= self.config.oversize_start_ratio
-                        or parent.interior_complexity_score <= 0.55
+                        or parent.border_contrast_score <= 0.55
                     )
                     and (
+                        nested_card_competitor
+                        or
                         parent.area_ratio >= self.config.oversize_start_ratio
                         or ratio_advantage >= 0.08
-                        or complexity_advantage >= 0.08
+                        or boundary_advantage >= 0.10
+                        or geometry_advantage >= 0.10
                     )
                 ):
                     parent.oversize_penalty = min(
@@ -1548,11 +1685,15 @@ class CardDetector:
                 if (
                     direct.inferred_edges == 0
                     and 0.55 <= size_ratio <= 1.80
-                    and direct.ratio_score >= 0.60
+                    and direct.ratio_score >= 0.35
                     and direct.edge_score >= candidate.edge_score - 0.12
                     and (
                         direct.agreement_score >= 0.20
                         or direct.line_support_score >= 0.45
+                        or (
+                            direct.area_ratio >= candidate.area_ratio * 1.12
+                            and direct.border_contrast_score >= 0.30
+                        )
                     )
                 ):
                     candidate.background_penalty += 0.15
@@ -1563,26 +1704,165 @@ class CardDetector:
                     )
                     break
 
+        # When a sizeable direct boundary is supported by multiple image
+        # signals, it is safer than an unrelated single Hough reconstruction
+        # with a slightly cleaner ideal ratio. This catches cards beside long
+        # desk/mat edges without disabling partial-edge recovery when no such
+        # physical perimeter exists.
+        dominant_direct_candidates = [
+            (index, candidate)
+            for index, candidate in enumerate(retained)
+            if candidate.inferred_edges == 0
+            and 0.08 <= candidate.area_ratio <= 0.28
+            and candidate.border_touches == 0
+            and candidate.geometry_score >= 0.72
+            and candidate.ratio_score >= 0.35
+            and candidate.edge_score >= 0.65
+            and candidate.border_contrast_score >= 0.35
+            and (
+                candidate.agreement_score >= 0.20
+                or len(candidate.source_methods) >= 2
+            )
+        ]
+        if dominant_direct_candidates:
+            dominant_index, dominant_direct = max(
+                dominant_direct_candidates,
+                key=lambda item: (
+                    item[1].area_ratio,
+                    item[1].border_contrast_score,
+                    item[1].agreement_score,
+                ),
+            )
+            for inferred_index, candidate in enumerate(retained):
+                if (
+                    candidate.inferred_edges > 0
+                    and dominant_direct.area_ratio
+                    >= candidate.area_ratio * 0.85
+                    and dominant_direct.geometry_score
+                    >= candidate.geometry_score - 0.18
+                ):
+                    candidate.background_penalty += 0.14
+                    rejection_sets[inferred_index].add(
+                        "complete_candidate_preferred"
+                    )
+                    dominant_direct.foreground_score = max(
+                        dominant_direct.foreground_score, 0.88
+                    )
+                    dominant_direct.nested_candidate_score = max(
+                        dominant_direct.nested_candidate_score, 0.92
+                    )
+            if dominant_direct.area_ratio >= 0.12:
+                for direct_index, candidate in enumerate(retained):
+                    if direct_index == dominant_index or candidate.inferred_edges != 0:
+                        continue
+                    size_ratio = dominant_direct.area_ratio / max(
+                        candidate.area_ratio, 1e-6
+                    )
+                    if (
+                        size_ratio >= 2.50
+                        and candidate.area_ratio <= 0.08
+                        and candidate.border_touches == 0
+                        and dominant_direct.geometry_score
+                        >= candidate.geometry_score - 0.10
+                        and dominant_direct.ratio_score
+                        >= candidate.ratio_score - 0.12
+                        and dominant_direct.border_contrast_score
+                        >= candidate.border_contrast_score - 0.08
+                    ):
+                        candidate.background_penalty += 0.06
+                        rejection_sets[direct_index].add(
+                            "smaller_scene_rectangle"
+                        )
+
+        # Crisp lines printed inside a card can form a small, perfect direct
+        # quad. When a substantially larger, multi-signal direct boundary
+        # overlaps it and has clearly better local boundary contrast, prefer
+        # the physical perimeter. This is deliberately capped below oversized
+        # scene rectangles so monitors and table regions do not gain priority.
+        for small_index, small in enumerate(retained):
+            if small.inferred_edges != 0:
+                continue
+            for large_index in overlaps[small_index]:
+                large = retained[large_index]
+                size_ratio = large.area_ratio / max(small.area_ratio, 1e-6)
+                if (
+                    large.inferred_edges == 0
+                    and 1.80 <= size_ratio <= 6.0
+                    and large.area_ratio <= 0.28
+                    and large.border_touches == 0
+                    and large.geometry_score >= 0.85
+                    and large.edge_score >= 0.80
+                    and large.agreement_score >= 0.25
+                    and large.border_contrast_score
+                    >= small.border_contrast_score + 0.15
+                ):
+                    small.internal_subregion_penalty = max(
+                        small.internal_subregion_penalty, 0.18
+                    )
+                    rejection_sets[small_index].add("internal_subregion")
+                    large.foreground_score = max(large.foreground_score, 0.86)
+                    large.nested_candidate_score = max(
+                        large.nested_candidate_score, 0.92
+                    )
+                    break
+
+        # At near-identical footprints, several independent contour/threshold
+        # observations are more stable than a lone Hough four-line solution.
+        # The latter can be a few degrees off even on an otherwise clear card.
+        for line_index, line_candidate in enumerate(retained):
+            if (
+                line_candidate.inferred_edges != 0
+                or "line4" not in line_candidate.strategy_groups
+                or bool(
+                    {"contour", "rotated_rect"}
+                    & line_candidate.strategy_groups
+                )
+            ):
+                continue
+            for observed_index in overlaps[line_index]:
+                observed = retained[observed_index]
+                size_ratio = observed.area_ratio / max(
+                    line_candidate.area_ratio, 1e-6
+                )
+                if (
+                    observed.inferred_edges == 0
+                    and 0.85 <= size_ratio <= 1.15
+                    and len(observed.source_methods) >= 4
+                    and observed.agreement_score >= 0.15
+                    and observed.geometry_score
+                    >= line_candidate.geometry_score - 0.03
+                    and observed.ratio_score >= line_candidate.ratio_score - 0.03
+                    and observed.border_contrast_score
+                    >= line_candidate.border_contrast_score - 0.08
+                ):
+                    line_candidate.background_penalty += 0.12
+                    rejection_sets[line_index].add("multi_signal_boundary_preferred")
+                    observed.foreground_score = max(observed.foreground_score, 0.88)
+                    break
+
         complete_candidates = [
             (index, candidate)
             for index, candidate in enumerate(retained)
             if candidate.inferred_edges == 0
             and candidate.area_ratio >= self.config.area_plateau_min_ratio
-            and candidate.ratio_score >= 0.60
+            # Strong perspective can make the projected quad ratio look poor;
+            # aspect agreement remains evidence rather than a hard gate.
+            and candidate.ratio_score >= 0.35
             and candidate.edge_score >= 0.65
         ]
         if complete_candidates:
             complete_index, complete = max(
                 complete_candidates,
                 key=lambda item: (
-                    0.28 * item[1].ratio_score
+                    0.21 * item[1].ratio_score
                     + 0.22 * item[1].edge_score
-                    + 0.18 * item[1].geometry_score
+                    + 0.20 * item[1].geometry_score
+                    + 0.10 * item[1].parallelism_score
+                    + 0.08 * item[1].perspective_score
                     + 0.12
                     * min(1.0, max(0, len(item[1].source_methods) - 1) / 3.0)
-                    + 0.08 * item[1].border_contrast_score
-                    + 0.07 * item[1].area_score
-                    + 0.05 * item[1].interior_complexity_score
+                    + 0.04 * item[1].border_contrast_score
+                    + 0.03 * item[1].area_score
                 ),
             )
             for inferred_index, candidate in enumerate(retained):
@@ -1592,7 +1872,7 @@ class CardDetector:
                 if (
                     0.45 <= size_ratio <= 3.0
                     and complete.geometry_score >= candidate.geometry_score - 0.12
-                    and complete.ratio_score >= candidate.ratio_score - 0.15
+                    and complete.ratio_score >= 0.35
                 ):
                     candidate.background_penalty += 0.09
                     rejection_sets[inferred_index].add("complete_candidate_preferred")
@@ -1769,6 +2049,100 @@ class CardDetector:
         return self.config.maximum_uniform_penalty * uniformity * area_factor
 
     @staticmethod
+    def _normalize_quad(points: np.ndarray) -> np.ndarray | None:
+        """Validate and order a quadrilateral as TL, TR, BR, BL.
+
+        Candidate generators are free to emit any cyclic point order. Keeping
+        this normalization at their shared boundary prevents a valid-looking
+        contour from reaching perspective correction as a self-intersecting or
+        inconsistently ordered quadrilateral.
+        """
+        polygon = np.asarray(points, dtype=np.float32).reshape(4, 2)
+        if not np.isfinite(polygon).all():
+            return None
+        distances = np.linalg.norm(
+            polygon[:, None, :] - polygon[None, :, :], axis=2
+        )
+        distances += np.eye(4, dtype=np.float32) * 1e6
+        if float(distances.min()) < 1.0:
+            return None
+
+        sums = polygon.sum(axis=1)
+        differences = polygon[:, 1] - polygon[:, 0]
+        indices = (
+            int(np.argmin(sums)),
+            int(np.argmin(differences)),
+            int(np.argmax(sums)),
+            int(np.argmax(differences)),
+        )
+        if len(set(indices)) == 4:
+            ordered = polygon[np.asarray(indices)]
+        else:
+            center = polygon.mean(axis=0)
+            angles = np.arctan2(polygon[:, 1] - center[1], polygon[:, 0] - center[0])
+            cyclic = polygon[np.argsort(angles)]
+            start = int(np.argmin(cyclic.sum(axis=1)))
+            ordered = np.roll(cyclic, -start, axis=0)
+            if ordered[1, 0] < ordered[3, 0]:
+                ordered = ordered[[0, 3, 2, 1]]
+
+        integer = np.round(ordered).astype(np.int32)
+        if not cv2.isContourConvex(integer):
+            return None
+        if abs(float(cv2.contourArea(ordered))) < 1.0:
+            return None
+        return ordered.astype(np.float32)
+
+    @classmethod
+    def _quad_geometry_scores(
+        cls, polygon: np.ndarray
+    ) -> tuple[float, float, float]:
+        """Return parallelism, corner plausibility, and perspective quality."""
+        points = np.asarray(polygon, dtype=np.float64).reshape(4, 2)
+        sides = np.roll(points, -1, axis=0) - points
+        lengths = np.linalg.norm(sides, axis=1)
+        if float(lengths.min()) < 1.0:
+            return 0.0, 0.0, 0.0
+        angles = np.mod(np.arctan2(sides[:, 1], sides[:, 0]), np.pi)
+        opposite_differences = (
+            cls._angle_distance(float(angles[0]), float(angles[2])),
+            cls._angle_distance(float(angles[1]), float(angles[3])),
+        )
+        parallelism = float(
+            np.mean(
+                [
+                    np.exp(-((np.degrees(value) / 24.0) ** 2))
+                    for value in opposite_differences
+                ]
+            )
+        )
+
+        corner_scores: list[float] = []
+        for index in range(4):
+            previous = points[(index - 1) % 4] - points[index]
+            following = points[(index + 1) % 4] - points[index]
+            cosine_value = float(
+                np.clip(
+                    np.dot(previous, following)
+                    / max(1e-9, np.linalg.norm(previous) * np.linalg.norm(following)),
+                    -1.0,
+                    1.0,
+                )
+            )
+            angle = np.degrees(np.arccos(cosine_value))
+            corner_scores.append(float(np.exp(-(((angle - 90.0) / 48.0) ** 2))))
+        corner_score = float(np.mean(corner_scores))
+
+        balance_scores = []
+        for first, second in ((lengths[0], lengths[2]), (lengths[1], lengths[3])):
+            ratio = max(first, second) / max(1.0, min(first, second))
+            balance_scores.append(float(np.exp(-abs(np.log(ratio)) / 0.85)))
+        perspective_score = float(
+            np.clip(0.45 * parallelism + 0.30 * corner_score + 0.25 * np.mean(balance_scores), 0.0, 1.0)
+        )
+        return parallelism, corner_score, perspective_score
+
+    @staticmethod
     def _perspective_tolerant_ratio(polygon: np.ndarray) -> float:
         points = np.asarray(polygon, dtype=np.float32).reshape(4, 2)
         lengths = np.asarray(
@@ -1821,6 +2195,9 @@ class CardDetector:
             area_score=candidate.area_score,
             rectangularity_score=candidate.rectangularity_score,
             line_support_score=candidate.line_support_score,
+            parallelism_score=candidate.parallelism_score,
+            corner_score=candidate.corner_score,
+            perspective_score=candidate.perspective_score,
             agreement_score=candidate.agreement_score,
             interior_detail_score=candidate.interior_detail_score,
             interior_complexity_score=candidate.interior_complexity_score,
@@ -1853,10 +2230,6 @@ class CardDetector:
         if abs(log(first.observed_ratio / second.observed_ratio)) > 0.28:
             return False
         iou = self._intersection_over_union(first.bounding_box, second.bounding_box)
-        if iou >= 0.64:
-            return True
-        first_center = np.mean(first.polygon, axis=0)
-        second_center = np.mean(second.polygon, axis=0)
         first_box = first.bounding_box
         second_box = second.bounding_box
         first_diagonal = np.hypot(
@@ -1865,11 +2238,32 @@ class CardDetector:
         second_diagonal = np.hypot(
             second_box[2] - second_box[0], second_box[3] - second_box[1]
         )
+        reference_diagonal = max(1.0, min(first_diagonal, second_diagonal))
+        corner_distances = np.linalg.norm(first.polygon - second.polygon, axis=1)
+        normalized_mean_corner_shift = float(np.mean(corner_distances)) / reference_diagonal
+        normalized_max_corner_shift = float(np.max(corner_distances)) / reference_diagonal
+        if iou >= 0.82:
+            return (
+                normalized_mean_corner_shift < 0.08
+                and normalized_max_corner_shift < 0.16
+            )
+        if iou >= 0.64:
+            return (
+                normalized_mean_corner_shift < 0.045
+                and normalized_max_corner_shift < 0.09
+            )
+        first_center = np.mean(first.polygon, axis=0)
+        second_center = np.mean(second.polygon, axis=0)
         center_distance = float(np.linalg.norm(first_center - second_center))
         size_ratio = max(first_diagonal, second_diagonal) / max(
             1.0, min(first_diagonal, second_diagonal)
         )
-        return center_distance < min(first_diagonal, second_diagonal) * 0.10 and size_ratio < 1.28
+        return (
+            center_distance < reference_diagonal * 0.10
+            and size_ratio < 1.28
+            and normalized_mean_corner_shift < 0.06
+            and normalized_max_corner_shift < 0.12
+        )
 
     def _confidence(
         self, best: _Candidate, second: _Candidate | None
@@ -1888,10 +2282,36 @@ class CardDetector:
             ambiguity_penalty = self.config.ambiguity_close_penalty
             margin_bonus = 0.0
         elif margin < self.config.ambiguity_medium_gap:
-            ambiguity_penalty = self.config.ambiguity_medium_penalty
+            progress = (
+                margin - self.config.ambiguity_close_gap
+            ) / (
+                self.config.ambiguity_medium_gap
+                - self.config.ambiguity_close_gap
+            )
+            ambiguity_penalty = (
+                self.config.ambiguity_close_penalty
+                + progress
+                * (
+                    self.config.ambiguity_medium_penalty
+                    - self.config.ambiguity_close_penalty
+                )
+            )
             margin_bonus = 0.0
         elif margin < self.config.ambiguity_wide_gap:
-            ambiguity_penalty = self.config.ambiguity_wide_penalty
+            progress = (
+                margin - self.config.ambiguity_medium_gap
+            ) / (
+                self.config.ambiguity_wide_gap
+                - self.config.ambiguity_medium_gap
+            )
+            ambiguity_penalty = (
+                self.config.ambiguity_medium_penalty
+                + progress
+                * (
+                    self.config.ambiguity_wide_penalty
+                    - self.config.ambiguity_medium_penalty
+                )
+            )
             margin_bonus = 0.02
         else:
             ambiguity_penalty = 0.0
@@ -1931,6 +2351,14 @@ class CardDetector:
 
     def _can_early_accept(self, candidates: list[_Candidate]) -> bool:
         if not candidates or candidates[0].total_score < self.config.early_accept_score:
+            return False
+        # A fast contour can be geometrically attractive but still belong to
+        # a monitor, paper sheet, or printed rectangle. Early acceptance is
+        # reserved for candidates also observed by the independent line path.
+        if not (
+            {"line4", "partial3", "partial2"}
+            & candidates[0].strategy_groups
+        ):
             return False
         margin = (
             candidates[0].total_score - candidates[1].total_score

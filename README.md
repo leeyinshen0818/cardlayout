@@ -13,12 +13,16 @@ require an internet connection.
 - Import JPG, JPEG, PNG, and PDF sources.
 - Open a two-page PDF as Front and Back in one step.
 - Automatically detect the physical card boundary and correct perspective.
+- Detect generic blue, white, grey, dark, red, low-saturation, and multicolored
+  physical cards without using card color as a requirement.
 - Handle low-texture card backs, weak edges, rounded corners, internal printed
   rectangles, and partial hand occlusion conservatively.
 - Adjust all four corners manually when automatic detection needs review.
+- Flip either side horizontally or vertically, or rotate it 180 degrees.
 - Apply independent sharpening and brightness/contrast presets to Front and Back.
 - Move Front and Back vertically in precise 1 mm steps.
 - Preview the complete A4 portrait page at the correct relative dimensions.
+- Prepare and export a Front-only card without an empty Back placeholder.
 - Export an A4 PDF or a 300-DPI JPG directly to Downloads.
 - Run as a single standalone `CardLayout.exe` with no Python installation.
 - Start maximized and automatically use a compact layout on smaller or
@@ -56,10 +60,26 @@ PDF-specific trimming.
 
 ## Detection and correction
 
-CardLayout uses a geometry-first OpenCV pipeline. It prioritizes the expected
-outer perimeter, long-edge support, the selected card-size ratio, and consistency
-with the rough detected region. Text, portraits, chips, logos, holograms, and
-internal rectangles are not treated as dominant evidence.
+CardLayout uses a geometry-first OpenCV pipeline. Multiple contour, adaptive
+threshold, multichannel edge, and Hough-line candidates are ranked together. It
+prioritizes convex four-corner geometry, parallel/opposing edge support,
+perspective plausibility, the expected outer perimeter, a softly scored card-size
+ratio, and consistency with the rough detected region. Text, portraits, chips,
+logos, holograms, card color, and internal rectangles are not treated as dominant
+evidence.
+
+Candidate selection is deliberately multi-stage. A larger pool of rough
+candidates is retained for difficult perspective and occlusion scenes, then
+contextual scoring distinguishes a coherent physical perimeter from unrelated
+rectangles belonging to keyboards, monitors, mats, paper, or the surrounding
+scene. Multi-signal contour boundaries are preferred over isolated Hough-line
+rectangles when their footprints agree. Small printed rectangles and partial
+reconstructions are prevented from outranking a credible full-card boundary.
+
+For a card held by a hand, the detector can preserve or extrapolate the likely
+outer geometry when a finger obscures an edge or corner. A lower-confidence but
+credible full-card candidate is retained for review and manual adjustment instead
+of being discarded. Genuinely tiny or implausible candidates still fail safely.
 
 The top, right, bottom, and left edge confidences are tracked independently. A
 weak or partly covered edge lowers confidence instead of forcing detection onto a
@@ -80,7 +100,7 @@ boundary.
 ### Manual corners
 
 The corner editor provides four labeled handles, connecting lines, a live
-rectified preview, zoom, pan, Fit, 100%, reset-to-automatic, Apply, and Cancel.
+rectified preview, zoom, pan, Fit, 100%, reset-to-automatic, Done, and Cancel.
 Invalid crossing, overlapping, non-convex, out-of-bounds, or near-zero-area corner
 arrangements cannot be applied.
 
@@ -88,13 +108,21 @@ arrangements cannot be applied.
 
 The collapsible right sidebar provides thumbnail previews for:
 
+- Orientation: Flip Horizontal, Flip Vertical, Rotate 180 degrees, and Reset
+  Orientation
+
 - Sharpen / Soften: Soft, Normal, Sharp, Sharper
 - Brightness / Contrast: Normal, Bright +10, Bright +20,
   Bright + Contrast, Strong Bright + Contrast
 
 Front and Back keep independent settings. **Reset corrections** restores only the
 selected side's appearance. The side-level **Reset** restores automatic geometry
-and Normal appearance without reloading the source file.
+plus Normal orientation and appearance without reloading the source file.
+
+Orientation is stored as non-destructive state after perspective correction and
+before appearance corrections. The current standalone dependencies do not provide
+reliable semantic text recognition, so the automatic orientation stage safely
+leaves uncertain images unchanged; the manual controls are always available.
 
 Opening or closing the sidebar only changes the UI viewport. It does not rerun
 detection, reload images, reset corners, or change physical A4 coordinates.
@@ -115,6 +143,10 @@ centered horizontally on an A4 portrait page.
 Front and Back can each be moved up or down independently in 1 mm steps and reset
 to their default position. These adjustments change physical placement; opening
 the Corrections sidebar or resizing the window does not.
+
+When only Front is loaded, the configured Front position is preserved and the
+rest of the page remains blank in both the preview and exported JPG/PDF. Loading
+Back restores the normal two-sided layout.
 
 For correctly sized output, print the exported PDF using **Actual Size** or
 **100%**. Do not select Fit, Shrink, or Scale to Page.
@@ -200,8 +232,15 @@ python -m pytest
 The tests cover input normalization, PDF/JPG parity, PDF frame trimming, layout
 geometry, exporters, detection scoring, low-texture backs, nested rectangles,
 partial edge and corner occlusion, perspective refinement, collapse protection,
-manual corners, appearance corrections, reset behavior, responsive UI, and
-sidebar interactions. GUI tests run without manually opening the application.
+manual corners, orientation transforms, Front-only output, appearance corrections,
+reset behavior, responsive UI, and sidebar interactions. GUI tests run without
+manually opening the application.
+
+The current suite contains **178 passing tests**. Detection regressions include
+generic card colors, strong perspective, close-up and distant cards, cards held by
+a hand, cluttered desks, monitor/keyboard distractors, strong internal rectangles,
+and low-contrast card backs. The packaged one-file Windows build is also rebuilt
+after detector changes so `dist\CardLayout.exe` contains the current pipeline.
 
 ## Privacy
 
@@ -227,13 +266,13 @@ build_windows.ps1
 ```
 
 `CardSide.original_image` preserves the normalized source. Detection, automatic
-perspective correction, manual correction, and appearance settings remain separate
-states. `CardSide.best_image` is the single source used by the side previews, A4
-preview, PDF exporter, and JPG exporter.
+perspective correction, manual correction, orientation, and appearance settings
+remain separate states. `CardSide.best_image` is the single source used by the
+side previews, A4 preview, PDF exporter, and JPG exporter.
 
 ## Current scope
 
 CardLayout does not include background removal, white balance, saturation controls,
-restoration, denoise, deblur, OCR, orientation recognition, or AI-based image
-reconstruction. Appearance presets adjust existing pixels and cannot restore
-missing detail.
+restoration, denoise, deblur, OCR, semantic automatic orientation recognition, or
+AI-based image reconstruction. Appearance presets adjust existing pixels and
+cannot restore missing detail.

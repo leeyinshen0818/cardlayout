@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import cv2
 import numpy as np
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QFrame, QLabel, QMessageBox
 from PIL import Image
@@ -31,6 +31,20 @@ def _click_card(window: MainWindow, side: str) -> None:
         pos=target.center().toPoint(),
     )
     QApplication.processEvents()
+
+
+def _card_side(tmp_path: Path, side: str, image: Image.Image | None = None) -> CardSide:
+    source = image or Image.new(
+        "RGB", (428, 270), (120, 150, 180) if side == "front" else (80, 110, 140)
+    )
+    return CardSide(
+        side=side,  # type: ignore[arg-type]
+        source_path=tmp_path / f"{side}.png",
+        source_type="image",
+        source_page=None,
+        original_image=source,
+        processed_image=source.copy(),
+    )
 
 
 def test_application_starts_maximized(monkeypatch) -> None:
@@ -155,9 +169,14 @@ def test_exports_save_directly_to_downloads_without_save_dialog(
     window.close()
 
 
-def test_preview_selection_reveals_controls_and_moves_each_side() -> None:
+def test_preview_selection_reveals_controls_and_moves_each_side(
+    tmp_path: Path,
+) -> None:
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
+    window.front = _card_side(tmp_path, "front")
+    window.back = _card_side(tmp_path, "back")
+    window._refresh()
     window.show()
     app.processEvents()
 
@@ -180,6 +199,94 @@ def test_preview_selection_reveals_controls_and_moves_each_side() -> None:
 
     window.preview.clear_selection()
     assert not window.preview.position_controls.isVisible()
+    window.close()
+
+
+def test_front_only_preview_leaves_back_position_completely_blank(
+    tmp_path: Path,
+) -> None:
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window.front = _card_side(tmp_path, "front")
+    window.back = None
+    window._refresh()
+    window.show()
+    app.processEvents()
+
+    page_rect = window.preview._page_rect()
+    back_rect = window.preview._card_target(
+        window.engine.calculate().back, page_rect
+    ).toAlignedRect()
+    image = window.preview.grab().toImage()
+    sample_points = (
+        back_rect.center(),
+        QPoint(
+            back_rect.left() + back_rect.width() // 4,
+            back_rect.top() + back_rect.height() // 4,
+        ),
+    )
+    for point in sample_points:
+        assert image.pixelColor(point).getRgb()[:3] == (255, 255, 255)
+
+    _click_card(window, "back")
+    assert window.preview.selected_side is None
+    assert not window.corrections_sidebar.isVisible()
+    window.close()
+
+
+def test_orientation_controls_are_immediate_independent_and_resettable(
+    tmp_path: Path,
+) -> None:
+    app = QApplication.instance() or QApplication([])
+    pattern = Image.new("RGB", (4, 2))
+    pattern.putdata(
+        [
+            (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0),
+            (255, 0, 255), (0, 255, 255), (40, 50, 60), (70, 80, 90),
+        ]
+    )
+    window = MainWindow()
+    window.front = _card_side(tmp_path, "front", pattern)
+    window.back = _card_side(tmp_path, "back", pattern.copy())
+    window._refresh()
+    window.show()
+    app.processEvents()
+
+    _click_card(window, "front")
+    QTest.mouseClick(
+        window.corrections_sidebar.orientation_buttons["flip_horizontal"],
+        Qt.MouseButton.LeftButton,
+    )
+    app.processEvents()
+    assert window.front.orientation_state.flip_horizontal
+    assert window.front.best_image.tobytes() == pattern.transpose(
+        Image.Transpose.FLIP_LEFT_RIGHT
+    ).tobytes()
+    assert window.back.orientation_state.is_normal
+    assert "Flipped Horizontal" in window.corrections_sidebar.orientation_status.text()
+
+    _click_card(window, "back")
+    QTest.mouseClick(
+        window.corrections_sidebar.orientation_buttons["flip_vertical"],
+        Qt.MouseButton.LeftButton,
+    )
+    QTest.mouseClick(
+        window.corrections_sidebar.orientation_buttons["rotate_180"],
+        Qt.MouseButton.LeftButton,
+    )
+    app.processEvents()
+    assert window.front.orientation_state.flip_horizontal
+    assert window.back.orientation_state == window.back.orientation_state.__class__(
+        flip_horizontal=True
+    )
+
+    QTest.mouseClick(
+        window.corrections_sidebar.orientation_buttons["reset"],
+        Qt.MouseButton.LeftButton,
+    )
+    app.processEvents()
+    assert window.back.orientation_state.is_normal
+    assert window.back.best_image.tobytes() == pattern.tobytes()
     window.close()
 
 

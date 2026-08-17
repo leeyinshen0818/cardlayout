@@ -108,8 +108,14 @@ class PagePreview(QWidget):
         painter.setPen(QPen(QColor("#cbd3df"), 1))
         painter.drawRect(page_rect)
 
-        self._draw_card(painter, page_rect, layout.front, self.front, "FRONT", "front")
-        self._draw_card(painter, page_rect, layout.back, self.back, "BACK", "back")
+        if self.front is not None:
+            self._draw_card(
+                painter, page_rect, layout.front, self.front, "FRONT", "front"
+            )
+        if self.back is not None:
+            self._draw_card(
+                painter, page_rect, layout.back, self.back, "BACK", "back"
+            )
 
     def _draw_card(self, painter, page_rect, rect, side, label, side_name) -> None:
         target = self._card_target(rect, page_rect)
@@ -240,8 +246,14 @@ class PagePreview(QWidget):
     def _side_at(self, position) -> SideName | None:
         layout = self.engine.calculate()
         page_rect = self._page_rect()
-        if self._card_target(layout.front, page_rect).contains(position):
+        if (
+            self.front is not None
+            and self._card_target(layout.front, page_rect).contains(position)
+        ):
             return "front"
-        if self._card_target(layout.back, page_rect).contains(position):
+        if (
+            self.back is not None
+            and self._card_target(layout.back, page_rect).contains(position)
+        ):
             return "back"
         return None

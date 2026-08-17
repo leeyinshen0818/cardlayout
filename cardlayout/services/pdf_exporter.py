@@ -32,8 +32,10 @@ class PDFExporter:
             page_width, page_height = self.engine.page_points()
             page = document.new_page(width=page_width, height=page_height)
             layout = self.engine.calculate()
-            self._insert_card(page, layout.front, front, "FRONT — empty")
-            self._insert_card(page, layout.back, back, "BACK — empty")
+            if front is not None:
+                self._insert_card(page, layout.front, front, "FRONT")
+            if back is not None:
+                self._insert_card(page, layout.back, back, "BACK")
             pdf_data = document.tobytes(garbage=4, deflate=True)
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(pdf_data)

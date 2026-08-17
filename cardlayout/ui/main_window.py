@@ -26,6 +26,7 @@ from cardlayout.models.card_side import CardSide, SideName
 from cardlayout.models.card_size import MALAYSIA_IC
 from cardlayout.models.detection import CardDetectionResult
 from cardlayout.models.image_correction import ImageCorrectionState
+from cardlayout.models.orientation import OrientationAction
 from cardlayout.models.layout import A4_LAYOUT
 from cardlayout.services.card_detector import CardDetector
 from cardlayout.services.card_processing import CardProcessingService
@@ -192,6 +193,9 @@ class MainWindow(QMainWindow):
         )
         self.corrections_sidebar.preset_selected.connect(
             self._select_correction_preset
+        )
+        self.corrections_sidebar.orientation_requested.connect(
+            self._apply_orientation_action
         )
         self.corrections_sidebar.collapse_requested.connect(
             self._collapse_corrections
@@ -466,6 +470,20 @@ class MainWindow(QMainWindow):
         if side is not None:
             self._set_image_correction(side, ImageCorrectionState())
 
+    def _apply_orientation_action(self, action: OrientationAction) -> None:
+        side = self.preview.selected_side
+        if side is None:
+            return
+        card = self.front if side == "front" else self.back
+        if card is None:
+            return
+        state = card.orientation_state.apply_action(action)
+        card.apply_orientation(state)
+        self._refresh()
+        self.statusBar().showMessage(
+            f"{side.title()} orientation: {state.label}", 3000
+        )
+
     def _reset_detection(self, side: str) -> None:
         card = self.front if side == "front" else self.back
         if card is None:
@@ -624,6 +642,7 @@ class MainWindow(QMainWindow):
             QLabel#correctionsTitle { color: #0f172a; font-size: 11pt; font-weight: 700; border: 0; }
             QLabel#correctionsHint { color: #64748b; font-size: 8pt; border: 0; }
             QLabel#correctionsCategory { color: #475569; font-size: 8pt; font-weight: 700; border: 0; margin-top: 4px; }
+            QLabel#orientationStatus { color: #64748b; font-size: 8pt; border: 0; }
             QToolButton { background: #ffffff; color: #475569; border: 1px solid #d8e0ea; border-radius: 6px; padding: 4px; font-size: 8pt; }
             QToolButton:hover { background: #f1f5fb; border-color: #9fb4d3; }
             QToolButton:checked { background: #e8f0ff; color: #194b9b; border: 2px solid #4f7fc8; }
@@ -640,6 +659,8 @@ class MainWindow(QMainWindow):
             QPushButton#sidebarCloseButton:hover { background: #eef2f7; color: #0f172a; }
             QPushButton#sidebarResetButton { min-height: 30px; background: #ffffff; color: #526176; border: 1px solid #cbd4e0; font-size: 8pt; }
             QPushButton#sidebarResetButton:hover { background: #edf3fb; }
+            QPushButton#orientationButton { min-height: 24px; padding: 0 5px; background: #ffffff; color: #526176; border: 1px solid #cbd4e0; font-size: 8pt; }
+            QPushButton#orientationButton:hover { background: #edf3fb; color: #234c86; }
             QLabel#presetValue { background: #e8f0ff; color: #194b9b; border: 1px solid #c8d9f5; border-radius: 7px; padding: 10px; font-weight: 600; }
             QLabel#privacyNote { background: #ecfdf5; color: #166534; border-radius: 7px; padding: 10px; }
             QFrame#cardInput { background: #ffffff; border: 1px solid #dce2ea; border-radius: 9px; }

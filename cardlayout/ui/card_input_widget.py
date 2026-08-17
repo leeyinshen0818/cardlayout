@@ -91,7 +91,7 @@ class CardInputWidget(QFrame):
         self.reset_button = QPushButton("Reset")
         self.reset_button.setObjectName("detectionButton")
         self.reset_button.setToolTip(
-            "Restore automatic corners and Normal image corrections"
+            "Restore automatic corners, Normal orientation, and Normal image corrections"
         )
         self.reset_button.clicked.connect(lambda: self.reset_requested.emit(self.side))
 
@@ -170,6 +170,7 @@ class CardInputWidget(QFrame):
             has_card
             and (
                 card.has_manual_correction
+                or not card.orientation_state.is_normal
                 or not card.image_correction_state.is_normal
             )
         )
@@ -178,7 +179,10 @@ class CardInputWidget(QFrame):
             text, color = "Ready", "#64748b"
         elif card.has_manual_correction:
             text, color = "Ready", "#16803b"
-        elif not card.image_correction_state.is_normal:
+        elif (
+            not card.orientation_state.is_normal
+            or not card.image_correction_state.is_normal
+        ):
             text, color = "Corrected", "#16803b"
         else:
             correction = card.automatic_perspective_result

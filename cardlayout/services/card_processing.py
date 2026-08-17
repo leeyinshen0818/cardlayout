@@ -3,6 +3,7 @@ from __future__ import annotations
 from cardlayout.models.card_side import CardSide
 from cardlayout.models.detection import CardDetectionResult
 from cardlayout.services.card_detector import CardDetector
+from cardlayout.services.orientation import OrientationAnalyzer
 from cardlayout.services.perspective_corrector import PerspectiveCorrector
 
 
@@ -13,11 +14,13 @@ class CardProcessingService:
         self,
         detector: CardDetector,
         perspective_corrector: PerspectiveCorrector | None = None,
+        orientation_analyzer: OrientationAnalyzer | None = None,
     ) -> None:
         self.detector = detector
         self.perspective_corrector = perspective_corrector or PerspectiveCorrector(
             detector.card_size
         )
+        self.orientation_analyzer = orientation_analyzer or OrientationAnalyzer()
 
     def detect(self, card_side: CardSide) -> CardDetectionResult:
         processing_raster = card_side.processing_raster
@@ -37,6 +40,17 @@ class CardProcessingService:
             )
             correction.debug_info.update(pipeline_diagnostics)
             card_side.apply_automatic_correction(correction)
+            if correction.success:
+                orientation = self.orientation_analyzer.analyze(
+                    card_side.geometry_image
+                )
+                card_side.apply_automatic_orientation(orientation)
+                correction.debug_info["automatic_orientation"] = {
+                    "method": orientation.method,
+                    "confidence": orientation.confidence,
+                    "applied": orientation.applied,
+                    "reason": orientation.reason,
+                }
         return result
 
     @staticmethod

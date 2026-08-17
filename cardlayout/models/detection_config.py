@@ -8,17 +8,19 @@ class DetectionScoreWeights:
     """Inspectable weights for the normalized candidate score."""
 
     area: float = 0.04
-    geometry: float = 0.13
-    aspect_ratio: float = 0.26
+    geometry: float = 0.14
+    aspect_ratio: float = 0.13
     edge_support: float = 0.14
-    rectangularity: float = 0.05
+    rectangularity: float = 0.07
     line_support: float = 0.11
-    method_agreement: float = 0.08
-    interior_detail: float = 0.02
-    interior_complexity: float = 0.04
+    parallelism: float = 0.07
+    perspective_quality: float = 0.05
+    method_agreement: float = 0.05
+    interior_detail: float = 0.04
+    interior_complexity: float = 0.02
     border_contrast: float = 0.06
     foreground: float = 0.03
-    nested_candidate: float = 0.04
+    nested_candidate: float = 0.05
 
     def __post_init__(self) -> None:
         total = sum(
@@ -29,6 +31,8 @@ class DetectionScoreWeights:
                 self.edge_support,
                 self.rectangularity,
                 self.line_support,
+                self.parallelism,
+                self.perspective_quality,
                 self.method_agreement,
                 self.interior_detail,
                 self.interior_complexity,
@@ -78,7 +82,9 @@ class CardDetectionConfig:
     two_inferred_edges_penalty: float = 0.18
     border_touch_penalty: float = 0.060
     plain_rectangle_penalty: float = 0.08
-    contextual_candidate_limit: int = 28
+    # Keep enough Stage-A alternatives for difficult perspective/occlusion
+    # scenes. A real card can initially rank below crisp background rectangles.
+    contextual_candidate_limit: int = 96
     contextual_analysis_long_edge: int = 1400
     oversize_start_ratio: float = 0.34
     oversize_full_ratio: float = 0.78
@@ -86,11 +92,13 @@ class CardDetectionConfig:
     nested_parent_penalty: float = 0.18
     nested_parent_min_area_ratio: float = 0.22
     nested_containment_ratio: float = 0.82
-    nested_minimum_size_multiple: float = 1.85
+    nested_minimum_size_multiple: float = 1.20
     uniform_complexity_threshold: float = 0.25
     maximum_uniform_penalty: float = 0.15
     small_area_penalty_end_ratio: float = 0.020
     maximum_small_area_penalty: float = 0.14
+    poor_ratio_score_threshold: float = 0.42
+    maximum_ratio_penalty: float = 0.22
     appearance_border_band_fraction: float = 0.045
     one_edge_evidence_recovery: float = 0.05
     two_edge_evidence_recovery: float = 0.10
@@ -102,7 +110,10 @@ class CardDetectionConfig:
     ambiguity_wide_penalty: float = 0.06
 
     high_confidence: float = 0.74
-    medium_confidence: float = 0.55
+    # Preserve a geometry-led best candidate for manual review in ambiguous
+    # occlusion/perspective scenes instead of discarding useful full-card
+    # corners just below the old 0.55 boundary.
+    medium_confidence: float = 0.50
     low_confidence: float = 0.36
     crop_safety_margin_fraction: float = 0.015
     weights: DetectionScoreWeights = field(default_factory=DetectionScoreWeights)
@@ -130,6 +141,8 @@ class CardDetectionConfig:
             raise ValueError("Nested parent area threshold is invalid")
         if not self.minimum_area_ratio < self.small_area_penalty_end_ratio < self.preferred_area_ratio:
             raise ValueError("Small-area penalty range is invalid")
+        if not 0 < self.poor_ratio_score_threshold < 1 or not 0 <= self.maximum_ratio_penalty <= 0.30:
+            raise ValueError("Aspect-ratio penalty parameters are invalid")
         if self.contextual_candidate_limit < 5 or self.contextual_analysis_long_edge < 400:
             raise ValueError("Contextual candidate ranking limits are invalid")
         if not 0 <= self.one_edge_evidence_recovery <= self.two_edge_evidence_recovery <= 0.15:

@@ -26,6 +26,7 @@ class CorrectionsPopover(QFrame):
     """Compact thumbnail correction panel usable as an embedded sidebar."""
 
     preset_selected = Signal(str, str)
+    orientation_requested = Signal(str)
     collapse_requested = Signal()
     reset_requested = Signal()
 
@@ -67,6 +68,34 @@ class CorrectionsPopover(QFrame):
         self.content_layout.setSpacing(6)
         self.content_layout.addLayout(title_row)
         self.content_layout.addWidget(hint)
+        orientation_label = QLabel("Orientation")
+        orientation_label.setObjectName("correctionsCategory")
+        self.content_layout.addWidget(orientation_label)
+        self.orientation_status = QLabel("Current: Normal")
+        self.orientation_status.setObjectName("orientationStatus")
+        self.content_layout.addWidget(self.orientation_status)
+        orientation_grid = QGridLayout()
+        orientation_grid.setHorizontalSpacing(6)
+        orientation_grid.setVerticalSpacing(5)
+        self.orientation_buttons: dict[str, QPushButton] = {}
+        for index, (action, text) in enumerate(
+            (
+                ("flip_horizontal", "Flip Horizontal"),
+                ("flip_vertical", "Flip Vertical"),
+                ("rotate_180", "Rotate 180°"),
+                ("reset", "Reset Orientation"),
+            )
+        ):
+            button = QPushButton(text)
+            button.setObjectName("orientationButton")
+            button.clicked.connect(
+                lambda checked=False, selected=action: self.orientation_requested.emit(
+                    selected
+                )
+            )
+            self.orientation_buttons[action] = button
+            orientation_grid.addWidget(button, index // 2, index % 2)
+        self.content_layout.addLayout(orientation_grid)
         self._add_category(
             self.content_layout,
             "Sharpen / Soften",
@@ -97,15 +126,19 @@ class CorrectionsPopover(QFrame):
             self.close_button.setFixedSize(24, 24)
             icon_size = QSize(68, 40)
             button_size = QSize(104, 66)
+            orientation_height = 24
         else:
             self.content_layout.setContentsMargins(12, 10, 12, 12)
             self.content_layout.setSpacing(6)
             self.close_button.setFixedSize(28, 28)
             icon_size = QSize(76, 46) if self._columns <= 2 else QSize(88, 56)
             button_size = QSize(122, 76) if self._columns <= 2 else QSize(104, 88)
+            orientation_height = 28
         for button in self._buttons.values():
             button.setIconSize(icon_size)
             button.setFixedSize(button_size)
+        for button in self.orientation_buttons.values():
+            button.setFixedHeight(orientation_height)
 
     def _add_category(
         self,
@@ -153,7 +186,10 @@ class CorrectionsPopover(QFrame):
         self._card = card
         self.title.setText(f"Corrections · {card.side.upper()}")
         state = card.image_correction_state
-        source = card.geometry_image
+        orientation = card.orientation_state
+        self.orientation_status.setText(f"Current: {orientation.label}")
+        self.orientation_buttons["reset"].setEnabled(not orientation.is_normal)
+        source = card.orientation_image
         for (category, key), button in self._buttons.items():
             preview_state = (
                 state.with_sharpen(key)  # type: ignore[arg-type]

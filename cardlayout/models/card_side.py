@@ -8,8 +8,13 @@ from PIL import Image
 
 from cardlayout.models.detection import CardDetectionResult
 from cardlayout.models.image_correction import ImageCorrectionState
+from cardlayout.models.orientation import (
+    AutomaticOrientationResult,
+    OrientationState,
+)
 from cardlayout.models.perspective import PerspectiveResult
 from cardlayout.services.image_corrections import apply_image_correction
+from cardlayout.services.orientation import apply_orientation
 
 SideName = Literal["front", "back"]
 SourceType = Literal["image", "pdf"]
@@ -33,6 +38,9 @@ class CardSide:
     image_correction_state: ImageCorrectionState = field(
         default_factory=ImageCorrectionState
     )
+    orientation_state: OrientationState = field(default_factory=OrientationState)
+    automatic_orientation_result: AutomaticOrientationResult | None = None
+    oriented_image: Image.Image | None = None
     corrected_image: Image.Image | None = None
     detector_input_image: Image.Image | None = None
     original_pdf_render: Image.Image | None = None
@@ -58,12 +66,14 @@ class CardSide:
         """Apply a safe detection result without altering the normalized source."""
         self.automatic_perspective_result = None
         self.manual_perspective_result = None
+        self.automatic_orientation_result = None
         self.rectified_image = None
         self.detection_result = result
         if result.success and result.cropped_image is not None:
             self.detected_image = result.cropped_image
         else:
             self.detected_image = None
+        self._refresh_orientation()
         self._refresh_image_correction()
         self.processed_image = self.best_image
 
@@ -82,6 +92,13 @@ class CardSide:
         """Image used by both the A4 preview and every exporter."""
         if not self.image_correction_state.is_normal and self.corrected_image is not None:
             return self.corrected_image
+        return self.orientation_image
+
+    @property
+    def orientation_image(self) -> Image.Image:
+        """Geometry output after the selected non-destructive orientation."""
+        if not self.orientation_state.is_normal and self.oriented_image is not None:
+            return self.oriented_image
         return self.geometry_image
 
     @property
@@ -124,6 +141,22 @@ class CardSide:
         self._refresh_image_correction()
         self.processed_image = self.best_image
 
+    def apply_orientation(self, state: OrientationState) -> None:
+        self.orientation_state = state
+        self._refresh_orientation()
+        self._refresh_image_correction()
+        self.processed_image = self.best_image
+
+    def apply_automatic_orientation(
+        self, result: AutomaticOrientationResult
+    ) -> None:
+        self.automatic_orientation_result = result
+        if result.applied:
+            self.orientation_state = result.recommended_state
+        self._refresh_orientation()
+        self._refresh_image_correction()
+        self.processed_image = self.best_image
+
     def reset_correction(self) -> None:
         """Discard manual geometry and restore the current automatic result."""
         self.manual_perspective_result = None
@@ -133,6 +166,8 @@ class CardSide:
         """Restore automatic geometry and Normal appearance without reloading."""
         self.manual_perspective_result = None
         self.image_correction_state = ImageCorrectionState()
+        self.orientation_state = OrientationState()
+        self.oriented_image = None
         self.corrected_image = None
         self._refresh_processed_stage()
 
@@ -142,15 +177,24 @@ class CardSide:
             self.rectified_image = active.rectified_image
         else:
             self.rectified_image = None
+        self._refresh_orientation()
         self._refresh_image_correction()
         self.processed_image = self.best_image
+
+    def _refresh_orientation(self) -> None:
+        if self.orientation_state.is_normal:
+            self.oriented_image = None
+        else:
+            self.oriented_image = apply_orientation(
+                self.geometry_image, self.orientation_state
+            )
 
     def _refresh_image_correction(self) -> None:
         if self.image_correction_state.is_normal:
             self.corrected_image = None
         else:
             self.corrected_image = apply_image_correction(
-                self.geometry_image, self.image_correction_state
+                self.orientation_image, self.image_correction_state
             )
 
     def reset_detection(self) -> None:
@@ -160,5 +204,8 @@ class CardSide:
         self.automatic_perspective_result = None
         self.manual_perspective_result = None
         self.image_correction_state = ImageCorrectionState()
+        self.orientation_state = OrientationState()
+        self.automatic_orientation_result = None
+        self.oriented_image = None
         self.corrected_image = None
         self.processed_image = self.original_image.copy()
